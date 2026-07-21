@@ -1,16 +1,19 @@
-PREFIX ?= /usr/local
+.PHONY: all test cli gui app clean
 
-.PHONY: all clean install
+all: test
 
-all: vader5-macos
+test:
+	swift test
 
-vader5-macos: Vader5Bridge.swift VirtualHID.c VirtualHID.h
-	xcrun clang -O2 -c VirtualHID.c -o VirtualHID.o
-	xcrun swiftc -O Vader5Bridge.swift VirtualHID.o -o $@ -framework IOKit -framework CoreFoundation
+cli:
+	swift build --product vader5-cli
 
-install: vader5-macos
-	install -d "$(PREFIX)/bin"
-	install -m 755 vader5-macos "$(PREFIX)/bin/vader5-macos"
+gui:
+	swift build --product Vader5GUI
+
+app:
+	./scripts/package-app.sh
 
 clean:
-	rm -f vader5-macos VirtualHID.o
+	swift package clean
+	rm -rf build

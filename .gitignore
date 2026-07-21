@@ -1,5 +1,6 @@
 .DS_Store
 .build/
+build/
 DerivedData/
 VirtualHID.o
 vader5-macos

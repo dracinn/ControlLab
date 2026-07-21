@@ -23,7 +23,7 @@ Working and tested on Apple silicon:
 - receiver discovery and user-space access
 - Flydigi initialization handshake
 - sticks, analog triggers, D-pad, and standard buttons
-- M1-M4, Home, and Fn/O
+- M1-M4, LM/RM, Home, and Fn/O
 - gyroscope and accelerometer decoding
 
 The physical reader and protocol decoder work without elevated privileges.
@@ -34,18 +34,52 @@ bypass that requirement on current macOS releases.
 Gyroscope, accelerometer, and rumble are not yet exposed through the virtual
 gamepad.
 
+## Architecture
+
+The GUI branch keeps protocol and device access independent from presentation:
+
+- `Vader5Core` — reusable Swift library for report parsing, receiver I/O, and
+  optional virtual-gamepad output
+- `vader5-cli` — small command-line client for diagnostics and automation
+- `Vader5GUI` — native SwiftUI macOS client with connection controls and live
+  input visualization
+- `Vader5CoreTests` — synthetic protocol-report tests
+
+Both clients use the same `Vader5Bridge` API. The bridge supports `.monitor`
+mode, which reads and displays the physical controller without a restricted
+entitlement, and `.virtualGamepad` mode for signed production builds.
+
 ## Build
 
 Xcode command-line tools are required.
 
 ```sh
-make
-./vader5-macos
+make test       # build the package and run core tests
+make cli        # build vader5-cli
+make gui        # build the SwiftUI executable
+make app        # package build/Vader5.app
+```
+
+Run the monitor-only CLI without the virtual-HID entitlement:
+
+```sh
+swift run vader5-cli --monitor --verbose
+```
+
+Open the packaged GUI:
+
+```sh
+open build/Vader5.app
 ```
 
 For virtual-gamepad output, sign the executable with a provisioning profile
 that contains `com.apple.developer.hid.virtual.device`. A sample entitlement
-file is included as `Vader5.entitlements`.
+file is included as `Vader5.entitlements`. Set `SIGNING_IDENTITY` when packaging
+an approved build:
+
+```sh
+SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)" make app
+```
 
 ## Protocol layout
 
