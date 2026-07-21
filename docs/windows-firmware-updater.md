@@ -14,8 +14,9 @@ For a standard Vader 5 Pro, the identifying values are `device_code = k5`,
 main, RF, SI, and dongle versions. `Vader5FirmwareUpdateClient` implements this
 request and response format.
 
-Using the versions captured from the attached controller on 2026-07-21, the
-service reported that main `7.1.5.2` and SI `3.5.1.7` were current. It offered:
+Using versions read live from the attached controller over USB on 2026-07-21
+(main `7.1.5.2`, RF `1.0.2.6`, SI `3.5.1.7`, dongle `0.4.6.7`), the service
+reported that main and SI were current. It offered:
 
 - Dongle `2.1.3.0`: `K5_BS20_Dongle_V2130_DFU.fwpkg`
 - RF `1.1.3.0`: `K5_BS20_Gamepad_V1130_DFU.fwpkg`

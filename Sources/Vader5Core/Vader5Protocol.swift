@@ -6,8 +6,10 @@ public enum Vader5Protocol {
     public static let usagePage = 0xffa0
     public static let usage = 1
 
+    public static let firmwareQueryCommand: [UInt8] = [0x5a, 0xa5, 0x01, 0x02, 0x03]
+
     static let initCommands: [[UInt8]] = [
-        [0x5a, 0xa5, 0x01, 0x02, 0x03],
+        firmwareQueryCommand,
         [0x5a, 0xa5, 0xa1, 0x02, 0xa3],
         [0x5a, 0xa5, 0x02, 0x02, 0x04],
         [0x5a, 0xa5, 0x04, 0x02, 0x06],
@@ -65,6 +67,46 @@ public enum Vader5Protocol {
 
     public static func parse(_ data: [UInt8]) -> Vader5State? {
         data.withUnsafeBufferPointer(parse)
+    }
+
+    /// Parses the NewXInput heartbeat returned by command 0x01.
+    ///
+    /// Vader 5 stores each four-part version in two packed BCD bytes. The
+    /// heartbeat can include a segment number at byte 4; the first segment
+    /// still contains all version fields used here.
+    public static func parseFirmwareVersions(_ data: UnsafeBufferPointer<UInt8>) -> Vader5FirmwareVersions? {
+        guard data.count >= 28,
+              data[0] == 0x5a, data[1] == 0xa5, data[2] == 0x01 else { return nil }
+
+        let segmented = data[4] < data[3]
+        guard !segmented || data[4] == 0 else { return nil }
+        let payload = segmented ? 5 : 4
+        let mainOffset = payload + 10
+        let dongleOffset = mainOffset + 2
+        let siOffset = dongleOffset + 2
+        let rfOffset = mainOffset + 12
+        guard rfOffset + 1 < data.count else { return nil }
+
+        func version(at offset: Int) -> String? {
+            let first = data[offset]
+            let second = data[offset + 1]
+            if (first == 0 && second == 0) || (first == 0xff && second == 0xff) {
+                return nil
+            }
+            return "\(first >> 4).\(first & 0x0f).\(second >> 4).\(second & 0x0f)"
+        }
+
+        guard let main = version(at: mainOffset) else { return nil }
+        return Vader5FirmwareVersions(
+            main: main,
+            rf: version(at: rfOffset),
+            si: version(at: siOffset),
+            dongle: version(at: dongleOffset)
+        )
+    }
+
+    public static func parseFirmwareVersions(_ data: [UInt8]) -> Vader5FirmwareVersions? {
+        data.withUnsafeBufferPointer(parseFirmwareVersions)
     }
 
     static func virtualReport(for state: Vader5State) -> [UInt8] {

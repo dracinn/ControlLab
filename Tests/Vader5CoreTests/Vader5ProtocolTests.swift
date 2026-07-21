@@ -46,3 +46,33 @@ import Testing
 @Test func rejectsUnrecognizedReport() {
     #expect(Vader5Protocol.parse([UInt8](repeating: 0, count: 32)) == nil)
 }
+
+@Test func parsesFirmwareVersionsFromHeartbeat() {
+    var report = [UInt8](repeating: 0, count: 32)
+    report[0...4] = [0x5a, 0xa5, 0x01, 0x18, 0x80]
+    report[14...19] = [0x71, 0x52, 0x15, 0x45, 0x35, 0x17]
+    report[26...27] = [0x10, 0x26]
+
+    #expect(Vader5Protocol.parseFirmwareVersions(report) == Vader5FirmwareVersions(
+        main: "7.1.5.2",
+        rf: "1.0.2.6",
+        si: "3.5.1.7",
+        dongle: "1.5.4.5"
+    ))
+}
+
+@Test func parsesSegmentedFirmwareHeartbeatAndOmitsEmptyModules() {
+    var report = [UInt8](repeating: 0, count: 32)
+    report[0...5] = [0x5a, 0xa5, 0x01, 0x02, 0x00, 0x80]
+    report[15...16] = [0x71, 0x52]
+
+    #expect(Vader5Protocol.parseFirmwareVersions(report) == Vader5FirmwareVersions(
+        main: "7.1.5.2"
+    ))
+}
+
+@Test func rejectsHeartbeatWithoutAControllerVersion() {
+    var report = [UInt8](repeating: 0, count: 32)
+    report[0...4] = [0x5a, 0xa5, 0x01, 0x18, 0x80]
+    #expect(Vader5Protocol.parseFirmwareVersions(report) == nil)
+}

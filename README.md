@@ -9,11 +9,11 @@ Static findings from the official Windows firmware updater, including the
 update endpoint and recovered HID OTA packet format, are in
 [`docs/windows-firmware-updater.md`](docs/windows-firmware-updater.md).
 
-The app now includes a **Firmware Diagnostics** section with a read-only package
-inspector, an in-memory OTA device simulator, decoded report logging, and a dry-run
-updater. The diagnostics API intentionally has no real HID transport; attempts to
-request a real firmware update are refused. It does not switch USB modes, erase,
-or write controller firmware.
+The app now includes a **Firmware Diagnostics** section that reads the connected
+controller's current firmware versions over USB, checks those versions against
+Flydigi's service, inspects packages, and runs an in-memory OTA simulator. The
+device query is read-only; attempts to request a real firmware update are refused.
+It does not switch USB modes, erase, or write controller firmware.
 
 > [!IMPORTANT]
 > The firmware update process still requires testing on Windows with the official
@@ -42,6 +42,7 @@ Working and tested on Apple silicon:
 - sticks, analog triggers, D-pad, and standard buttons
 - M1-M4, LM/RM, Home, and Fn/O
 - gyroscope and accelerometer decoding
+- live controller, RF, SI, and dongle firmware-version reads
 
 The physical reader and protocol decoder work without elevated privileges.
 Creating the standard virtual gamepad requires Apple's restricted
@@ -81,6 +82,12 @@ Run the monitor-only CLI without the virtual-HID entitlement:
 
 ```sh
 swift run vader5-cli --monitor --verbose
+```
+
+Read the firmware versions currently reported by the connected device:
+
+```sh
+swift run vader5-cli --firmware
 ```
 
 Open the packaged GUI:
