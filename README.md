@@ -16,6 +16,10 @@ packages, and runs an in-memory OTA simulator. Downloads are storage-only;
 attempts to request a real firmware update are refused. The app does not switch
 USB modes, erase, or write controller firmware.
 
+Flydigi currently returns package links using HTTP. The downloader upgrades the
+known `api-web.cdn.flydigi.com` host to its working HTTPS endpoint and rejects
+unrecognized insecure download hosts.
+
 > [!IMPORTANT]
 > The firmware update process still requires testing on Windows with the official
 > Flydigi application. In particular, the NearLink `SwitchUsb` transition,

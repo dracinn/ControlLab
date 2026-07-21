@@ -103,3 +103,14 @@ import Testing
         try Vader5FirmwareDownloadClient.validate(data: Data([1]), response: missing)
     }
 }
+
+@Test func upgradesFlydigiCDNDownloadsToHTTPS() throws {
+    let returnedURL = URL(string: "http://api-web.cdn.flydigi.com/devicefirmwares/test.fwpkg")!
+    let secureURL = try Vader5FirmwareDownloadClient.secureURL(for: returnedURL)
+    #expect(secureURL.absoluteString == "https://api-web.cdn.flydigi.com/devicefirmwares/test.fwpkg")
+
+    let unknownHTTP = URL(string: "http://example.com/firmware.fwpkg")!
+    #expect(throws: Vader5FirmwareDownloadError.insecureURL) {
+        try Vader5FirmwareDownloadClient.secureURL(for: unknownHTTP)
+    }
+}

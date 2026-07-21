@@ -57,7 +57,7 @@ public enum Vader5FirmwareDownloadError: Error, Sendable, Equatable, CustomStrin
     public var description: String {
         switch self {
         case .insecureURL:
-            "Firmware downloads must use a secure HTTPS URL."
+            "The firmware URL is not HTTPS and is not a recognized Flydigi download host."
         case .invalidResponse:
             "The firmware server returned an invalid download response."
         case .emptyFile:
@@ -79,10 +79,7 @@ public struct Vader5FirmwareDownloadClient: Sendable {
         release: Vader5FirmwareRelease,
         to destination: URL
     ) async throws -> Vader5FirmwarePackageInfo {
-        guard release.url.scheme?.lowercased() == "https" else {
-            throw Vader5FirmwareDownloadError.insecureURL
-        }
-        var request = URLRequest(url: release.url)
+        var request = URLRequest(url: try Self.secureURL(for: release.url))
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, response) = try await session.data(for: request)
         try Self.validate(data: data, response: response)
@@ -98,6 +95,20 @@ public struct Vader5FirmwareDownloadClient: Sendable {
             throw Vader5FirmwareDownloadError.invalidResponse
         }
         guard !data.isEmpty else { throw Vader5FirmwareDownloadError.emptyFile }
+    }
+
+    static func secureURL(for url: URL) throws -> URL {
+        if url.scheme?.lowercased() == "https" { return url }
+        guard url.scheme?.lowercased() == "http",
+              url.host?.lowercased() == "api-web.cdn.flydigi.com",
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw Vader5FirmwareDownloadError.insecureURL
+        }
+        components.scheme = "https"
+        guard let secureURL = components.url else {
+            throw Vader5FirmwareDownloadError.insecureURL
+        }
+        return secureURL
     }
 }
 
