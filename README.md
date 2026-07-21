@@ -5,6 +5,23 @@ Experimental macOS interoperability support for the Flydigi Vader 5 Pro
 protocol, decodes its input reports, and forwards them through a standard
 virtual HID gamepad.
 
+Static findings from the official Windows firmware updater, including the
+update endpoint and recovered HID OTA packet format, are in
+[`docs/windows-firmware-updater.md`](docs/windows-firmware-updater.md).
+
+The app now includes a **Firmware Diagnostics** section with a read-only package
+inspector, an in-memory OTA device simulator, decoded report logging, and a dry-run
+updater. The diagnostics API intentionally has no real HID transport; attempts to
+request a real firmware update are refused. It does not switch USB modes, erase,
+or write controller firmware.
+
+> [!IMPORTANT]
+> The firmware update process still requires testing on Windows with the official
+> Flydigi application. In particular, the NearLink `SwitchUsb` transition,
+> boot-mode USB identity, `.fwpkg` validation, acknowledgements, failure recovery,
+> and rollback behavior must be captured and verified before real firmware writes
+> are enabled on macOS. Do not use Firmware Diagnostics as a production updater.
+
 ## Hardware
 
 - Controller: Flydigi Vader 5 Pro

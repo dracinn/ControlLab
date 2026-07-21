@@ -7,7 +7,11 @@ app_dir="${repo_dir}/build/Vader5.app"
 binary="${repo_dir}/.build/${configuration}/Vader5GUI"
 
 cd "${repo_dir}"
-swift build -c "${configuration}" --product Vader5GUI
+swift_build_args=(-c "${configuration}" --product Vader5GUI)
+if [[ "${SWIFTPM_DISABLE_SANDBOX:-0}" == "1" ]]; then
+    swift_build_args+=(--disable-sandbox)
+fi
+swift build "${swift_build_args[@]}"
 rm -rf "${app_dir}"
 mkdir -p "${app_dir}/Contents/MacOS" "${app_dir}/Contents/Resources"
 cp "${binary}" "${app_dir}/Contents/MacOS/Vader5GUI"
