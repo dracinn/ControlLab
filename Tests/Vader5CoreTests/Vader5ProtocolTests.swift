@@ -76,24 +76,3 @@ import Testing
     report[0...4] = [0x5a, 0xa5, 0x01, 0x18, 0x80]
     #expect(Vader5Protocol.parseFirmwareVersions(report) == nil)
 }
-
-@Test func appliesIndependentMotionSensorDeadZones() {
-    let state = Vader5State(
-        leftX: 1, leftY: 2, rightX: 3, rightY: 4,
-        leftTrigger: 5, rightTrigger: 6, dpad: 8,
-        buttons: [.a], extraButtons: 0,
-        gyro: .init(x: 127, y: -128, z: 129),
-        accelerometer: .init(x: 255, y: -256, z: 257)
-    )
-
-    let filtered = state.applyingSensorDeadZones(gyro: 128, accelerometer: 256)
-    #expect(filtered.gyro == Vector3(x: 0, y: 0, z: 129))
-    #expect(filtered.accelerometer == Vector3(x: 0, y: 0, z: 257))
-    #expect(filtered.leftX == state.leftX)
-    #expect(filtered.buttons == state.buttons)
-}
-
-@Test func deadZoneHandlesFullInt16Range() {
-    let vector = Vector3(x: .min, y: .max, z: 1).applyingDeadZone(32_767)
-    #expect(vector == Vector3(x: .min, y: 0, z: 0))
-}

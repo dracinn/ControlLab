@@ -28,14 +28,6 @@ public struct Vector3: Sendable, Equatable {
     public let x: Int16
     public let y: Int16
     public let z: Int16
-
-    public func applyingDeadZone(_ threshold: Int) -> Self {
-        let threshold = max(0, min(threshold, 32_768))
-        func filtered(_ value: Int16) -> Int16 {
-            abs(Int(value)) <= threshold ? 0 : value
-        }
-        return Self(x: filtered(x), y: filtered(y), z: filtered(z))
-    }
 }
 
 public struct Vader5State: Sendable, Equatable {
@@ -58,14 +50,4 @@ public struct Vader5State: Sendable, Equatable {
         gyro: .init(x: 0, y: 0, z: 0),
         accelerometer: .init(x: 0, y: 0, z: 0)
     )
-
-    public func applyingSensorDeadZones(gyro gyroThreshold: Int, accelerometer accelerometerThreshold: Int) -> Self {
-        Self(
-            leftX: leftX, leftY: leftY, rightX: rightX, rightY: rightY,
-            leftTrigger: leftTrigger, rightTrigger: rightTrigger,
-            dpad: dpad, buttons: buttons, extraButtons: extraButtons,
-            gyro: gyro.applyingDeadZone(gyroThreshold),
-            accelerometer: accelerometer.applyingDeadZone(accelerometerThreshold)
-        )
-    }
 }
