@@ -3,21 +3,32 @@ import Vader5Core
 
 struct ContentView: View {
     @ObservedObject var model: BridgeViewModel
+    @State private var section = "Controller"
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
-            ScrollView {
-                VStack(spacing: 18) {
-                    connectionCard
-                    HStack(alignment: .top, spacing: 18) {
-                        sticksCard
-                        buttonsCard
+            Picker("Section", selection: $section) {
+                Text("Controller").tag("Controller")
+                Text("Firmware Diagnostics").tag("Firmware Diagnostics")
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 22).padding(.top, 14)
+            if section == "Firmware Diagnostics" {
+                FirmwareDiagnosticsView()
+            } else {
+                ScrollView {
+                    VStack(spacing: 18) {
+                        connectionCard
+                        HStack(alignment: .top, spacing: 18) {
+                            sticksCard
+                            buttonsCard
+                        }
+                        sensorsCard
                     }
-                    sensorsCard
+                    .padding(22)
                 }
-                .padding(22)
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
