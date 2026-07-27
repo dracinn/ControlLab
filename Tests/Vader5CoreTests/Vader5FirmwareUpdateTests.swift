@@ -190,6 +190,51 @@ import Testing
     }
 }
 
+@Test func bs2xCodecEscapesFramesAndValidatesAcknowledgements() throws {
+    let command = Vader5BS2XProtocol.commandBody(
+        sequence: 0x5c,
+        command: 0xfc,
+        payload: [0x00, 0x00, 0x5c])
+    let framed = Vader5BS2XProtocol.frame(body: command)
+
+    #expect(framed.prefix(2) == [0x5c, 0x73])
+    #expect(framed.suffix(2) == [0x5c, 0x65])
+    #expect(framed.filter { $0 == 0x5c }.count == 6)
+    #expect(try Vader5BS2XProtocol.unframe(framed) == command)
+
+    #expect(
+        try Vader5BS2XProtocol.parseAcknowledgement(
+            Vader5BS2XProtocol.acknowledgementFrame(sequence: 0x2a))
+            == .success(sequence: 0x2a))
+}
+
+@Test func bs2xCodecRejectsMalformedOrNegativeAcknowledgements() throws {
+    let rejectedFrame = Vader5BS2XProtocol.acknowledgementFrame(
+        sequence: 0x2a,
+        returnCode: 0x07)
+    #expect(
+        try Vader5BS2XProtocol.parseAcknowledgement(rejectedFrame)
+            == .rejected(sequence: 0x2a, returnCode: 0x07))
+
+    var corrupt = rejectedFrame
+    corrupt[corrupt.count - 3] ^= 0x01
+    #expect(throws: Vader5BS2XProtocol.CodecError.invalidCRC) {
+        try Vader5BS2XProtocol.parseAcknowledgement(corrupt)
+    }
+    #expect(throws: Vader5BS2XProtocol.CodecError.malformedEscape) {
+        try Vader5BS2XProtocol.unframe([0x5c, 0x73, 0x5c, 0x01, 0x5c, 0x65])
+    }
+}
+
+@Test func bs2xRetryLimitsMatchRecoveredTimeWindows() {
+    #expect(Vader5BS2XRetryWindow.ssb.maximumAttempts == 150)
+    #expect(Vader5BS2XRetryWindow.partition.maximumAttempts == 60)
+    #expect(
+        Vader5BS2XRetryWindow(
+            acknowledgementMilliseconds: 200,
+            totalMilliseconds: 0).maximumAttempts == 0)
+}
+
 @Test func validatesFirmwareDownloadResponses() throws {
     let url = URL(string: "https://example.com/firmware.fwpkg")!
     let ok = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!

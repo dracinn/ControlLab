@@ -28,12 +28,12 @@ private enum WorkspacePage: String, CaseIterable {
 }
 
 private enum CLTheme {
-    static let background = Color(red: 0.055, green: 0.063, blue: 0.078)
-    static let sidebar = Color(red: 0.075, green: 0.084, blue: 0.102)
-    static let surface = Color(red: 0.095, green: 0.106, blue: 0.128)
-    static let raised = Color(red: 0.12, green: 0.132, blue: 0.157)
-    static let border = Color.white.opacity(0.075)
-    static let accent = Color(red: 0.23, green: 0.58, blue: 1)
+    static let background = SpaceStationTheme.darkest
+    static let sidebar = SpaceStationTheme.secondDark
+    static let surface = SpaceStationTheme.thirdDark
+    static let raised = SpaceStationTheme.option
+    static let border = SpaceStationTheme.line
+    static let accent = SpaceStationTheme.accent
 }
 
 struct ContentView: View {
@@ -133,7 +133,7 @@ struct ContentView: View {
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(CLTheme.border))
             .padding(12)
         }
-        .frame(width: 218)
+        .frame(width: 204)
         .background(CLTheme.sidebar)
         .overlay(alignment: .trailing) { Rectangle().fill(CLTheme.border).frame(width: 1) }
     }
@@ -155,7 +155,7 @@ struct ContentView: View {
                 icon: model.isRunning ? "checkmark.circle.fill" : "circle.dashed",
                 tint: model.isRunning ? .green : .secondary)
         }
-        .padding(.horizontal, 24).frame(height: 72)
+        .padding(.horizontal, 24).frame(height: 60)
         .background(CLTheme.sidebar.opacity(0.72))
     }
 
@@ -310,7 +310,10 @@ struct ContentView: View {
 
                 lightingMessage
                 Button { model.applyLighting() } label: {
-                    Label("Apply to controller", systemImage: "sparkles")
+                    Label(
+                        model.isApplyingLighting
+                            ? "Applying…" : "Apply to controller",
+                        systemImage: "sparkles")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large)
@@ -327,22 +330,23 @@ struct ContentView: View {
                         HStack {
                             FieldLabel("DOCK DISPLAY PREVIEW")
                             Spacer()
-                            Text("3-PIXEL TRIANGLE · 162 PIXELS")
+                            Text("16-ROW SPACE STATION MATRIX · 162 PIXELS")
                                 .font(.system(size: 9, weight: .bold))
                                 .tracking(0.8)
                                 .foregroundStyle(.secondary)
                         }
-                        DockLightingPreview(
+                        RGBPreviewProcessControl(
                             mode: model.dockLightingMode,
                             colors: model.dockLightingColors,
                             brightness: model.dockLightingBrightness,
                             period: model.dockLightingPeriod,
-                            direction: model.dockLightingDirection)
+                            direction: model.dockLightingDirection,
+                            deviceType: model.dockDeviceType ?? 0)
                             .frame(maxWidth: 430)
-                        Text("Near-front Flydigi Dock 2 Pro product image")
+                        Text("Original official Flydigi Dock 2 Pro render")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.tertiary)
-                        Text("14-pixel straight runs with three-pixel corner clusters")
+                        Text("All protocol pixels projected across the triangular display")
                             .font(.system(size: 9))
                             .foregroundStyle(.tertiary)
                     }
@@ -371,7 +375,7 @@ struct ContentView: View {
                                                : "COLORS")
                                     Spacer()
                                     if model.dockLightingMode.allowsMultipleColors {
-                                        Text("\(model.dockLightingColors.count)/5")
+                                        Text("\(model.dockLightingColors.count)/\(model.dockLightingMode.maximumColorCount)")
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                     }
@@ -389,7 +393,8 @@ struct ContentView: View {
                                             Image(systemName: "plus")
                                         }
                                         .buttonStyle(.bordered)
-                                        .disabled(model.dockLightingColors.count >= 5)
+                                        .disabled(model.dockLightingColors.count >=
+                                                  model.dockLightingMode.maximumColorCount)
                                         Button { model.removeDockLightingColor() } label: {
                                             Image(systemName: "minus")
                                         }
@@ -401,17 +406,20 @@ struct ContentView: View {
                             }
                         }
 
-                        if model.dockLightingMode != .off {
+                        if model.dockLightingMode != .off &&
+                            model.dockLightingMode != .deviceDefault {
                             SliderField(
                                 label: "BRIGHTNESS",
                                 value: $model.dockLightingBrightness,
                                 suffix: "%")
                         }
-                        if model.dockLightingMode.isAnimated {
+                        if model.dockLightingMode.isAnimated &&
+                            model.dockLightingMode != .deviceDefault {
                             SliderField(
                                 label: "CYCLE TIME",
                                 value: $model.dockLightingPeriod,
-                                suffix: "")
+                                suffix: " s",
+                                range: model.dockLightingMode.periodRange)
                         }
                         if model.dockLightingMode.usesDirection {
                             VStack(alignment: .leading, spacing: 7) {
@@ -501,7 +509,9 @@ struct ContentView: View {
 
     @ViewBuilder private var dockLightingMessage: some View {
         if model.isApplyingDockLighting {
-            Label("Sending the 162-pixel frame…", systemImage: "ellipsis.circle")
+            Label(
+                "Uploading animation frames—the dock may pause briefly…",
+                systemImage: "ellipsis.circle")
                 .foregroundStyle(.secondary)
         } else {
             switch model.dockLightingStatus {
@@ -591,8 +601,10 @@ private struct StudioPanel<Content: View>: View {
             content
         }
         .padding(16).frame(maxWidth: .infinity, alignment: .leading)
-        .background(CLTheme.surface, in: RoundedRectangle(cornerRadius: 13))
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(CLTheme.border))
+        .background(CLTheme.surface,
+                    in: RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius))
+        .overlay(RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius)
+            .stroke(CLTheme.border))
     }
 }
 
@@ -654,10 +666,22 @@ private struct SliderField: View {
     let label: String
     @Binding var value: Double
     let suffix: String
+    var range: ClosedRange<Double> = 1...100
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack { FieldLabel(label); Spacer(); Text("\(Int(value))\(suffix)").font(.system(.caption, design: .monospaced)) }
-            Slider(value: $value, in: 1...100)
+            if range.lowerBound < range.upperBound {
+                Slider(value: Binding(
+                    get: {
+                        min(max(value, range.lowerBound), range.upperBound)
+                    },
+                    set: {
+                        value = min(
+                            max($0, range.lowerBound), range.upperBound)
+                    }),
+                    in: range,
+                    step: 1)
+            }
         }
     }
 }

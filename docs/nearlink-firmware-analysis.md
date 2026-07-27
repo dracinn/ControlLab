@@ -66,6 +66,43 @@ recovered and inspected with PE metadata, strings, exports, and disassembly:
 
 The binaries are not committed to this repository.
 
+The official CDN installer downloaded on 2026-07-27 has SHA-256
+`736070b18d99ef77b0eb4622fb670613cf86b6fcc1bcded923a4bae8dfdc373a`.
+It is a newer Inno Setup 6.7 wrapper than the installer previously examined,
+but its four embedded updater components have the exact hashes shown above.
+The copy installed in a CrossOver bottle also matches all four hashes.
+
+### Reproducible static analysis
+
+[`scripts/analyze-burntool-static.sh`](../scripts/analyze-burntool-static.sh)
+accepts a directory containing `BurnTool.exe` and `libburn.dll`, refuses to
+process binaries whose hashes differ from the verified specimens, records PE
+metadata, and creates an isolated Ghidra project. Its post-script exports the
+function inventory, updater-related strings and references, and focused
+decompilation for firmware parsing and transport functions. Inputs, Ghidra
+projects, and generated decompilation should stay outside the repository.
+
+Example:
+
+```sh
+scripts/analyze-burntool-static.sh \
+  --input-dir "/path/to/Flydigi Space Station/firmware/tool/hsh_tool" \
+  --ghidra-home "/path/to/ghidra_12.1_PUBLIC" \
+  --output-dir "/private/tmp/controllab-burn-analysis"
+```
+
+The official Ghidra 12.1 archive does not ship an Apple-silicon decompiler.
+On an Apple-silicon Mac, build the bundled native source once before running
+the script:
+
+```sh
+cd "/path/to/ghidra_12.1_PUBLIC/support/gradle"
+gradle buildNatives
+```
+
+This workflow imports and decompiles the Windows binaries but never executes
+them.
+
 ### Confirmed dispatch
 
 Space Station first sends IPC command `IpcCommandEnum_SwitchUsb` (`15`) with
@@ -136,15 +173,81 @@ implementation includes `ParseNormalFwpkg`, `ParseNewFwpkg`, `SendShakeHand`,
 `DownloadBootData`, `SendSsbData`, `SendShaData`, and `SendExitFrame`.
 
 The decoded normal package parser recognizes magic `0xEFBEADDF`. The new parser
-accepts the `0xEFBEADCF` through `0xEFBEADDE` family, bounds-checks its table,
+accepts the `0xEFBEADD0` through `0xEFBEADDE` family, bounds-checks its table,
 and verifies a SOP CRC-16 before accepting partition records. New-format table
 entries are `0x118` bytes; older entries are `0x34` bytes. These structures are
 inside the protected payload and are not the outer `4E 15 8D CB` container.
 
 The transport uses libusb bulk and interrupt transfers, discovers endpoints
 from the active USB interface, and has distinct handshake, data, erase, and
-frame timeout paths. Embedded messages confirm retry and ACK-timeout behavior,
-but the exact retry counts and acknowledgement bytes have not yet been proven.
+frame timeout paths.
+
+### Confirmed BS2X frame and acknowledgement behavior
+
+Ghidra analysis identifies BS2X as `BurnTypeSixChip`. Its framed transport:
+
+- prefixes a frame with bytes `5C 73`
+- duplicates every literal `5C` byte in the body
+- terminates the frame with bytes `5C 65`
+- uses an XOR of all preceding unescaped body bytes as the one-byte body CRC
+
+Each body begins with a wrapping one-byte sequence counter. The SSB data body
+uses command `FC`, a little-endian 16-bit page index, two zero bytes, payload,
+then CRC. SHA data uses command `FD`, a big-endian 32-bit length/address field,
+payload, then CRC. Partition data uses command `04`, followed by payload and
+CRC.
+
+An accepted reply is a complete escaped frame whose decoded acknowledgement
+type is `02`, return code is `01`, and body CRC matches. A partial frame returns
+an internal “need more data” result; a bad acknowledgement type, non-success
+return code, or CRC mismatch fails the operation.
+
+`SendFrame` does not use a fixed retry count. It resends after the
+per-attempt acknowledgement window expires until the total operation timeout
+expires. The recovered SSB/SHA calls use a 200 ms acknowledgement window and a
+30,000 ms total timeout; partition data uses 500 ms and 30,000 ms. Consequently
+the theoretical retry ceiling is time-based (roughly 150 or 60 attempts,
+respectively), reduced by transfer and processing time.
+
+The BS2X handshake is text-oriented rather than this ACK frame. It reads until
+`-romloader` appears, or detects `-ssb-codeloader`, erases the transient SSB,
+and continues waiting. The configured handshake timeout is stored directly;
+`-1` means no timeout. After boot data is sent, the updater waits for
+`-ssb-codeloader` and treats a return to `-romloader` as failure.
+
+The boot sequence is:
+
+1. send SSB pages
+2. send SHA data
+3. optionally send key-store, certificate, and signature data
+4. send an unacknowledged exit frame
+5. wait for the SSB loader banner
+6. initialize the partition protocol and program selected partition types
+
+These findings define simulator behavior. They do not authorize a hardware
+writer: the pre-boot mode switch, package decryption/key derivation, exact USB
+boot identity, and recovery path remain unresolved.
+
+`Vader5BS2XProtocol` now implements this framing, escaping, XOR CRC,
+acknowledgement validation, and recovered time-window limits as an in-memory
+codec. It has no IOKit or HID handle and cannot communicate with hardware.
+
+### CrossOver observations
+
+The CrossOver installation is useful as a stable source of the installed
+files and logs even though the GUI does not render. Its Electron log repeatedly
+reports failure to connect to `\\?\pipe\fcs.sock`. A corrected-order diagnostic
+confirmed that the companion Windows service reaches the `RUNNING` state and
+logs `FlydigiWorker Waiting for client connection...`. A connection-only probe
+then connected and disconnected successfully without sending an IPC payload,
+so CrossOver's named-pipe transport works and the earlier Electron `ENOENT`
+entries predate service readiness. The current GUI problem occurs earlier in
+Electron startup. The framing and service behavior are documented in
+[`spacestation-ipc-analysis.md`](spacestation-ipc-analysis.md). The installed
+`configure/config_setting.ini` also sets `isErase=1`, so directly launching the
+DFU path is not a safe diagnostic technique. CrossOver is therefore being used
+only for static files, configuration, registry, and log inspection—not for
+running BurnTool or sending USB update traffic.
 
 ## Gate for any future hardware experiment
 

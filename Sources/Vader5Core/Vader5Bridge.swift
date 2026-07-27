@@ -166,6 +166,17 @@ public final class Vader5Bridge {
         try setLighting(.init(mode: .steady, colors: [color], brightness: brightness))
     }
 
+    public func refreshLightingConfiguration() throws {
+        guard configDevice != nil else {
+            throw Vader5Error.lightingUnavailable(
+                "Connect the controller over USB before reading lighting.")
+        }
+        ledConfigChunks = []
+        guard send(Vader5Protocol.ledConfigReadCommand()) == kIOReturnSuccess else {
+            throw Vader5Error.lightingWrite
+        }
+    }
+
     public func setLighting(_ configuration: Vader5LightingConfiguration) throws {
         if let sdlGamepad {
             guard configuration.mode == .steady, let color = configuration.colors.first else {
@@ -199,6 +210,40 @@ public final class Vader5Bridge {
             RunLoop.current.run(until: Date().addingTimeInterval(0.025))
         }
         let updated = updatedLEDConfig(baseConfig, configuration: configuration)
+        self.ledConfig = updated
+        ledConfigsByMode[configuration.mode] = updated
+        onLightingConfiguration?(configuration)
+    }
+
+    /// Writes controller lighting without blocking the caller's executor
+    /// during the inter-packet delay required by the receiver.
+    @MainActor public func setLightingAsync(
+        _ configuration: Vader5LightingConfiguration
+    ) async throws {
+        if sdlGamepad != nil {
+            try setLighting(configuration)
+            return
+        }
+
+        guard let ledConfig else {
+            throw Vader5Error.lightingUnavailable(
+                "Lighting is available after ControlLab reads the controller's current USB configuration.")
+        }
+        let baseConfig = ledConfigsByMode[configuration.mode] ?? ledConfig
+        guard let packets = Vader5Protocol.lightingPackets(
+            basedOn: baseConfig, configuration: configuration)
+        else {
+            throw Vader5Error.lightingUnavailable(
+                "Lighting is available after ControlLab reads the controller's current USB configuration.")
+        }
+        for packet in packets {
+            guard send(packet) == kIOReturnSuccess else {
+                throw Vader5Error.lightingWrite
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let updated = updatedLEDConfig(
+            baseConfig, configuration: configuration)
         self.ledConfig = updated
         ledConfigsByMode[configuration.mode] = updated
         onLightingConfiguration?(configuration)

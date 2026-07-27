@@ -100,7 +100,8 @@ Dock lighting is an independent IOKit path matching USB `37D7:6001` on usage
 page `FFA0`. It does not require the controller bridge to be connected and does
 not route through SDL. ControlLab mirrors Space Station's Off, Solid, Default,
 Custom, Diagonal Flow, Breathing, Gradient, Wave Gradient, Rainbow, and Pulse
-modes with an 18-by-9 preview, brightness, cycle time, direction, and palettes.
+modes with Space Station's 16-row, 162-pixel preview and animation patterns,
+plus matching brightness, cycle-time, direction, and palette controls.
 It also reads and applies Space Station's charging and power behavior toggles.
 The core API accepts a full 162-pixel frame for custom designs and animations.
 

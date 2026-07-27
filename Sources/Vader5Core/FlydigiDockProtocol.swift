@@ -5,6 +5,7 @@ public enum FlydigiDockProtocolError: Error, CustomStringConvertible, Sendable {
     case invalidAnimationPixelCount(frameSize: Int, actual: Int)
     case tooManyFrames(maximum: Int, actual: Int)
     case invalidColorCount(maximum: Int, actual: Int)
+    case missingFactoryDefaultFrames
 
     public var description: String {
         switch self {
@@ -16,11 +17,15 @@ public enum FlydigiDockProtocolError: Error, CustomStringConvertible, Sendable {
             "The dock supports at most \(maximum) animation frames, but received \(actual)."
         case .invalidColorCount(let maximum, let actual):
             "The dock supports at most \(maximum) effect colors, but received \(actual)."
+        case .missingFactoryDefaultFrames:
+            "Default lighting requires a validated Flydigi factory animation."
         }
     }
 }
 
-public enum FlydigiDockLightingMode: UInt8, CaseIterable, Sendable, Equatable {
+public enum FlydigiDockLightingMode: UInt8, Codable, CaseIterable, Sendable,
+    Equatable
+{
     case off = 0
     case solid = 1
     case deviceDefault = 2
@@ -49,7 +54,7 @@ public enum FlydigiDockLightingMode: UInt8, CaseIterable, Sendable, Equatable {
 
     public var usesColors: Bool {
         switch self {
-        case .solid, .custom, .diagonalFlow, .breathing, .gradient, .waveGradient, .pulse:
+        case .solid, .custom, .diagonalFlow, .breathing, .waveGradient, .pulse:
             true
         default:
             false
@@ -57,12 +62,13 @@ public enum FlydigiDockLightingMode: UInt8, CaseIterable, Sendable, Equatable {
     }
 
     public var usesDirection: Bool {
-        self == .diagonalFlow || self == .gradient || self == .waveGradient
+        self == .waveGradient || self == .rainbow
     }
 
     public var isAnimated: Bool {
         switch self {
-        case .diagonalFlow, .breathing, .gradient, .waveGradient, .rainbow, .pulse:
+        case .deviceDefault, .diagonalFlow, .breathing, .gradient,
+             .waveGradient, .rainbow, .pulse:
             true
         default:
             false
@@ -71,19 +77,41 @@ public enum FlydigiDockLightingMode: UInt8, CaseIterable, Sendable, Equatable {
 
     public var minimumColorCount: Int {
         switch self {
-        case .gradient, .waveGradient: 2
-        case .solid, .custom, .diagonalFlow, .breathing, .pulse: 1
+        case .diagonalFlow, .waveGradient: 2
+        case .solid, .custom, .breathing, .pulse: 1
         default: 0
         }
     }
 
     public var allowsMultipleColors: Bool {
-        self == .diagonalFlow || self == .breathing ||
-            self == .gradient || self == .waveGradient || self == .pulse
+        self == .diagonalFlow || self == .waveGradient
+    }
+
+    public var maximumColorCount: Int {
+        allowsMultipleColors ? 2 : minimumColorCount
+    }
+
+    public var defaultPeriod: UInt8 {
+        switch self {
+        case .breathing: 3
+        case .gradient: 5
+        case .diagonalFlow, .waveGradient, .rainbow, .pulse: 2
+        default: 1
+        }
+    }
+
+    public var periodRange: ClosedRange<Double> {
+        switch self {
+        case .gradient: 1...10
+        case .diagonalFlow, .breathing, .waveGradient, .rainbow, .pulse: 1...5
+        default: 1...1
+        }
     }
 }
 
-public enum FlydigiDockLightingDirection: UInt8, CaseIterable, Sendable, Equatable {
+public enum FlydigiDockLightingDirection: UInt8, Codable, CaseIterable,
+    Sendable, Equatable
+{
     case none = 0
     case right = 1
     case left = 2
@@ -117,7 +145,7 @@ public struct FlydigiDockLightingConfiguration: Sendable, Equatable {
     public var direction: FlydigiDockLightingDirection
     public var pixels: [Vader5RGBColor]
 
-    /// `pixels` contains zero or more flattened 18×9 frames in display order.
+    /// `pixels` contains zero or more flattened 162-pixel frames in display order.
     public init(
         mode: FlydigiDockLightingMode = .solid,
         period: UInt8 = 50,
@@ -162,13 +190,19 @@ public struct FlydigiDockDeviceSettings: Sendable, Equatable {
 }
 
 public struct FlydigiDockSnapshot: Sendable, Equatable {
+    public var deviceType: UInt8?
+    public var firmwareVersion: String?
     public var settings: FlydigiDockDeviceSettings?
     public var lighting: FlydigiDockLightingConfiguration?
 
     public init(
+        deviceType: UInt8? = nil,
+        firmwareVersion: String? = nil,
         settings: FlydigiDockDeviceSettings? = nil,
         lighting: FlydigiDockLightingConfiguration? = nil
     ) {
+        self.deviceType = deviceType
+        self.firmwareVersion = firmwareVersion
         self.settings = settings
         self.lighting = lighting
     }
@@ -215,6 +249,10 @@ public enum FlydigiDockProtocol {
         if configuration.mode == .custom && configuration.pixels.isEmpty {
             throw FlydigiDockProtocolError.invalidPixelCount(
                 expected: pixelCount, actual: configuration.pixels.count)
+        }
+        if configuration.mode == .deviceDefault &&
+            configuration.pixels.isEmpty {
+            throw FlydigiDockProtocolError.missingFactoryDefaultFrames
         }
         if !configuration.pixels.isEmpty &&
             !configuration.pixels.count.isMultiple(of: pixelCount) {
@@ -268,12 +306,24 @@ public enum FlydigiDockProtocol {
     }
 
     public static func parseSnapshot(_ reports: [[UInt8]]) -> FlydigiDockSnapshot {
+        var deviceType: UInt8?
+        var firmwareVersion: String?
         var settings: FlydigiDockDeviceSettings?
         var lighting: FlydigiDockLightingConfiguration?
         for report in reports where report.count >= 6 &&
             report[0] == 0x5a && report[1] == 0xa5 {
             switch report[2] {
             case 0x01 where report.count > 21:
+                deviceType = report[6]
+                let version = [
+                    report[16] >> 4,
+                    report[16] & 0x0f,
+                    report[17] >> 4,
+                    report[17] & 0x0f,
+                ]
+                if version.contains(where: { $0 != 0 }) {
+                    firmwareVersion = version.map(String.init).joined(separator: ".")
+                }
                 settings = .init(
                     sleepWhenCharging: report[18] == 1,
                     ledSync: report[19] == 1,
@@ -285,7 +335,11 @@ public enum FlydigiDockProtocol {
                 break
             }
         }
-        return .init(settings: settings, lighting: lighting)
+        return .init(
+            deviceType: deviceType,
+            firmwareVersion: firmwareVersion,
+            settings: settings,
+            lighting: lighting)
     }
 
     private static func configurationPayload(

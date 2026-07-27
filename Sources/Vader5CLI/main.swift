@@ -11,6 +11,133 @@ func parseRGBHex(_ input: String) -> Vader5RGBColor? {
         blue: UInt8(number & 0xff))
 }
 
+final class ControllerLightingProbe: @unchecked Sendable {
+    var status: Vader5LightingStatus = .checking
+    var configurations: [Vader5LightingConfiguration] = []
+}
+
+func runLoopUntil(
+    timeout: TimeInterval,
+    _ condition: () -> Bool
+) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if condition() { return true }
+        RunLoop.current.run(
+            mode: .default,
+            before: min(deadline, Date().addingTimeInterval(0.025)))
+    }
+    return condition()
+}
+
+if CommandLine.arguments.contains("--controller-lighting-config") {
+    let bridge = Vader5Bridge()
+    let probe = ControllerLightingProbe()
+    bridge.onLightingStatus = { probe.status = $0 }
+    bridge.onLightingConfiguration = { probe.configurations.append($0) }
+    defer { bridge.stop() }
+    do {
+        try bridge.start(mode: .monitor, transport: .usbReceiver)
+        guard runLoopUntil(timeout: 3, {
+            if case .ready(.usb) = probe.status {
+                return !probe.configurations.isEmpty
+            }
+            return false
+        }), let configuration = probe.configurations.last else {
+            throw Vader5Error.lightingUnavailable(
+                "Timed out reading the controller lighting configuration.")
+        }
+        print("Mode:       \(configuration.mode.title)")
+        print("Brightness: \(configuration.brightness)%")
+        print("Cycle time: \(configuration.period)")
+        print("Colors:     \(configuration.colors.count)")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write("Error: \(error)\n".data(using: .utf8)!)
+        exit(1)
+    }
+}
+
+if CommandLine.arguments.contains("--test-controller-lighting") {
+    let bridge = Vader5Bridge()
+    let probe = ControllerLightingProbe()
+    bridge.onLightingStatus = { probe.status = $0 }
+    bridge.onLightingConfiguration = { probe.configurations.append($0) }
+    defer { bridge.stop() }
+    do {
+        try bridge.start(mode: .monitor, transport: .usbReceiver)
+        guard runLoopUntil(timeout: 3, {
+            if case .ready(.usb) = probe.status {
+                return !probe.configurations.isEmpty
+            }
+            return false
+        }), let original = probe.configurations.last else {
+            throw Vader5Error.lightingUnavailable(
+                "Timed out reading the controller's original lighting configuration.")
+        }
+
+        print(
+            "Original controller lighting: \(original.mode.title), \(original.brightness)%, period \(original.period)")
+        let tests: [Vader5LightingConfiguration] = [
+            .init(mode: .flow, colors: [], brightness: 35, period: 2),
+            .init(
+                mode: .breathing,
+                colors: [.init(red: 0, green: 160, blue: 128)],
+                brightness: 40,
+                period: 3),
+            .init(
+                mode: .gradient,
+                colors: [
+                    .init(red: 0, green: 96, blue: 255),
+                    .init(red: 196, green: 32, blue: 230),
+                ],
+                brightness: 45,
+                period: 4),
+            .init(
+                mode: .feedback,
+                colors: [.init(red: 255, green: 96, blue: 0)],
+                brightness: 50,
+                period: 2),
+            .init(
+                mode: .steady,
+                colors: [.init(red: 128, green: 32, blue: 220)],
+                brightness: 55,
+                period: 1),
+            .init(mode: .off, colors: [], brightness: 0, period: 1),
+            .init(mode: .deviceDefault, colors: [], brightness: 100, period: 1),
+        ]
+
+        for configuration in tests {
+            try bridge.setLighting(configuration)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+            let callbackCount = probe.configurations.count
+            try bridge.refreshLightingConfiguration()
+            guard runLoopUntil(timeout: 2, {
+                probe.configurations.count > callbackCount
+            }), let readback = probe.configurations.last else {
+                throw Vader5Error.lightingUnavailable(
+                    "No readback after \(configuration.mode.title).")
+            }
+            let acceptedDefault = configuration.mode == .deviceDefault &&
+                (readback.mode == .deviceDefault || readback.mode == .flow)
+            guard readback.mode == configuration.mode || acceptedDefault else {
+                throw Vader5Error.lightingUnavailable(
+                    "\(configuration.mode.title) read back as \(readback.mode.title).")
+            }
+            print(
+                "PASS \(configuration.mode.title): read back \(readback.mode.title), \(readback.brightness)%, period \(readback.period)")
+        }
+
+        try bridge.setLighting(original)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+        print("Restored controller lighting to \(original.mode.title).")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write("Error: \(error)\n".data(using: .utf8)!)
+        exit(1)
+    }
+}
+
 if CommandLine.arguments.contains("--dock-status") {
     do {
         print(try FlydigiDock().isConnected()
@@ -26,6 +153,12 @@ if CommandLine.arguments.contains("--dock-status") {
 if CommandLine.arguments.contains("--dock-config") {
     do {
         let snapshot = try FlydigiDock().readSnapshot()
+        if let deviceType = snapshot.deviceType {
+            print("Device type: \(deviceType)")
+        }
+        if let firmwareVersion = snapshot.firmwareVersion {
+            print("Firmware:    \(firmwareVersion)")
+        }
         if let lighting = snapshot.lighting {
             print("Mode:       \(lighting.mode.title)")
             print("Brightness: \(lighting.brightness)%")
@@ -74,23 +207,47 @@ if let optionIndex = CommandLine.arguments.firstIndex(of: "--dock-mode") {
             "Error: unknown dock mode '\(modeName)'.\n".data(using: .utf8)!)
         exit(2)
     }
-    let colors: [Vader5RGBColor] = [
-        .init(red: 0, green: 160, blue: 128),
-        .init(red: 128, green: 32, blue: 220),
-    ]
-    let configuration = FlydigiDockLightingConfiguration(
-        mode: mode,
-        period: 50,
-        brightness: 40,
-        colors: mode == .custom ? [] : colors,
-        direction: .downRight,
-        pixels: FlydigiDockFrameGenerator.pixels(
-            mode: mode,
-            colors: colors,
-            direction: .downRight))
     do {
+        let configuration: FlydigiDockLightingConfiguration
+        if mode == .deviceDefault {
+            let snapshot = try FlydigiDock().readSnapshot()
+            guard let deviceType = snapshot.deviceType, deviceType <= 4 else {
+                throw FlydigiDockFactoryLightingError.missingLightingConfiguration
+            }
+            let repository = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+            let url = repository
+                .appendingPathComponent(
+                    "Sources/Vader5GUI/Resources/FlydigiDockDefaults")
+                .appendingPathComponent("default_mapping_\(deviceType).dat")
+            configuration = try FlydigiDockFactoryLighting.decode(
+                Data(contentsOf: url))
+        } else {
+            let palette: [Vader5RGBColor] = [
+                .init(red: 0, green: 160, blue: 128),
+                .init(red: 128, green: 32, blue: 220),
+            ]
+            let colors = mode.usesColors
+                ? Array(palette.prefix(mode.maximumColorCount))
+                : []
+            let direction: FlydigiDockLightingDirection =
+                mode.usesDirection ? .downRight : .none
+            configuration = FlydigiDockLightingConfiguration(
+                mode: mode,
+                period: mode.defaultPeriod,
+                brightness: 40,
+                colors: mode == .custom ? [] : colors,
+                direction: direction,
+                pixels: FlydigiDockFrameGenerator.pixels(
+                    mode: mode,
+                    colors: colors,
+                    direction: direction))
+        }
         try FlydigiDock().setLighting(configuration)
-        print("Applied \(mode.title) at 40% brightness.")
+        print(
+            "Applied \(mode.title) with \(configuration.pixels.count / FlydigiDockProtocol.pixelCount) frame(s) at \(configuration.brightness)% brightness.")
         exit(0)
     } catch {
         FileHandle.standardError.write("Error: \(error)\n".data(using: .utf8)!)
