@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import Vader5Core
@@ -58,6 +59,46 @@ import Testing
     #expect(info.sha256.count == 64)
 }
 
+@Test func parsesBoundedNearLinkContainerLayout() throws {
+    var package = Data(repeating: 0, count: 0x100)
+    func write(_ bytes: [UInt8], at offset: Int) {
+        package.replaceSubrange(offset..<offset + bytes.count, with: bytes)
+    }
+    func writeUInt32(_ value: UInt32, at offset: Int) {
+        write([
+            UInt8(value & 0xff), UInt8((value >> 8) & 0xff),
+            UInt8((value >> 16) & 0xff), UInt8(value >> 24),
+        ], at: offset)
+    }
+
+    write(Vader5FirmwarePackageInspector.nearLinkMagic, at: 0)
+    writeUInt32(0x40, at: 8)
+    write(Vader5FirmwarePackageInspector.nearLinkMagic, at: 0x40)
+    writeUInt32(0x20, at: 0x48)
+    writeUInt32(0x90, at: 0x64)
+    writeUInt32(0x70, at: 0x68)
+    write(Array("QTOF".utf8), at: 0x90)
+    writeUInt32(0xc0, at: 0x98)
+    writeUInt32(0x40, at: 0x9c)
+    write([0x5a, 0x00, 0x10, 0x00], at: 0xc0)
+    let payloadDigest = SHA256.hash(data: package[0xc0..<0x100])
+    write(Array(payloadDigest), at: 0xa0)
+
+    let info = Vader5FirmwarePackageInspector.inspect(data: package)
+    let layout = try #require(info.nearLinkLayout)
+    #expect(layout.outerHeaderSize == 0x40)
+    #expect(layout.innerHeaderSize == 0x20)
+    #expect(layout.descriptorOffset == 0x60)
+    #expect(layout.subpackageMagic == "QTOF")
+    #expect(layout.payloadOffset == 0xc0)
+    #expect(layout.payloadLength == 0x40)
+    #expect(layout.payloadHeader == "5A 00 10 00")
+    #expect(layout.payloadSHA256Matches)
+
+    writeUInt32(0x80, at: 0x9c)
+    #expect(Vader5FirmwarePackageInspector.parseNearLinkLayout(package) == nil)
+}
+
 @Test func dryRunBuildsReportsAndCompletesInMemory() throws {
     let result = try Vader5DiagnosticUpdater.run(image: Data(0..<80))
     #expect(result.blockCount == 5)
@@ -81,6 +122,65 @@ import Testing
     #expect(throws: Vader5FirmwareTransportError.timeout(0)) {
         try Vader5DiagnosticUpdater.run(
             image: Data(repeating: 0xaa, count: 32), scenario: .timeout(block: 0))
+    }
+}
+
+@Test func strictSimulatorTargetsTheRequestedBlock() {
+    #expect(throws: Vader5FirmwareTransportError.rejected(block: 3, status: 1)) {
+        try Vader5DiagnosticUpdater.run(
+            image: Data(repeating: 0xaa, count: 80), scenario: .crcError(block: 3))
+    }
+}
+
+@Test func strictSimulatorDetectsCorruptedRecords() throws {
+    let transport = Vader5DryRunTransport()
+    #expect(try transport.exchange(Vader5HIDOTAProtocol.startReport(), block: nil) == .acknowledgement)
+    var packet = Vader5HIDOTAProtocol.dataReport(
+        image: Data(repeating: 0xaa, count: 16), startingBlock: 0).report
+    packet[6] ^= 0xff
+    #expect(throws: Vader5FirmwareTransportError.self) {
+        try transport.exchange(packet, block: 0)
+    }
+}
+
+@Test func simulatorRetriesTransientCorruption() throws {
+    let result = try Vader5DiagnosticUpdater.run(
+        image: Data(repeating: 0xaa, count: 48),
+        scenario: .corruptedPacketOnce(block: 0),
+        policy: .init(maxPacketRetries: 1))
+    #expect(result.blockCount == 3)
+    #expect(result.events.contains { $0.message == "RETRY BLOCK 0, ATTEMPT 1" })
+    #expect(result.events.last?.message == "SUCCESS")
+}
+
+@Test func simulatorRestartsAfterDisconnectAndInterruption() throws {
+    for scenario in [
+        Vader5SimulationScenario.disconnectOnce(block: 0),
+        .interrupted(block: 0),
+    ] {
+        let result = try Vader5DiagnosticUpdater.run(
+            image: Data(repeating: 0xaa, count: 48),
+            scenario: scenario,
+            policy: .init(maxRecoveryRestarts: 1))
+        #expect(result.events.filter { $0.message == "SEND START" }.count == 2)
+        #expect(result.events.contains { $0.message == "RECOVERY RESTART FROM BLOCK 0" })
+        #expect(result.events.last?.message == "SUCCESS")
+    }
+}
+
+@Test func simulatorStopsWhenRecoveryIsDisabled() {
+    #expect(throws: Vader5FirmwareTransportError.disconnected(0)) {
+        try Vader5DiagnosticUpdater.run(
+            image: Data(repeating: 0xaa, count: 16), scenario: .disconnectOnce(block: 0))
+    }
+    #expect(throws: Vader5FirmwareTransportError.interrupted(0)) {
+        try Vader5DiagnosticUpdater.run(
+            image: Data(repeating: 0xaa, count: 16), scenario: .interrupted(block: 0))
+    }
+    #expect(throws: Vader5FirmwareTransportError.unexpectedResponse) {
+        try Vader5DiagnosticUpdater.run(
+            image: Data(repeating: 0xaa, count: 16),
+            scenario: .unexpectedAcknowledgement(block: 0))
     }
 }
 

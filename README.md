@@ -8,9 +8,15 @@ SDL3's standard gamepad layer over the profile already exposed by macOS.
 Static findings from the official Windows firmware updater, including the
 update endpoint and recovered HID OTA packet format, are in
 [`docs/windows-firmware-updater.md`](docs/windows-firmware-updater.md).
+The current BS20 package layout and full-size recovery simulations are recorded
+in [`docs/nearlink-firmware-analysis.md`](docs/nearlink-firmware-analysis.md).
+An Android HCI snoop workflow for capturing the official mobile updater is in
+[`docs/android-firmware-capture.md`](docs/android-firmware-capture.md).
 The clean-room Space Station lighting analysis and recovered New XInput RGB
 packet layout are in
 [`docs/spacestation-rgb-analysis.md`](docs/spacestation-rgb-analysis.md).
+The verified Charging Station 2 Pro display framing is documented in
+[`docs/flydigi-dock-rgb.md`](docs/flydigi-dock-rgb.md).
 
 The app now includes a **Firmware Diagnostics** section that reads the connected
 controller's current firmware versions over USB, checks those versions against
@@ -36,6 +42,7 @@ unrecognized insecure download hosts.
 - USB vendor ID: `0x37D7`
 - USB product ID: `0x2401`
 - Transport: Flydigi 2.4 GHz USB receiver
+- Charging Station 2 Pro product ID: `0x6001`
 
 The receiver exposes vendor-defined HID interfaces instead of a standard HID
 gamepad collection. The bridge uses the `0xFFA0` interface, sends the documented
@@ -57,6 +64,11 @@ Working and tested on Apple silicon:
 - steady-color RGB control over the USB receiver after the current lighting
   configuration is read and validated
 - SDL3 RGB output for gamepads that advertise SDL's standard RGB LED capability
+- native IOKit control of all 162 RGB pixels on the Charging Station 2 Pro,
+  including Space Station's ten lighting modes, brightness, cycle time,
+  direction, palettes, custom frames, and display off
+- live Charging Station behavior reads and writes for sleep while charging,
+  charging animation, LED sync, and turn-off-with-system
 
 The physical reader and protocol decoder work without elevated privileges.
 Creating the standard virtual gamepad requires Apple's restricted
@@ -84,6 +96,14 @@ time; and up to five colors where the selected effect supports them. Flow and
 Default retain their device-supplied preset frames, and settings are remembered
 per mode while ControlLab remains connected.
 
+Dock lighting is an independent IOKit path matching USB `37D7:6001` on usage
+page `FFA0`. It does not require the controller bridge to be connected and does
+not route through SDL. ControlLab mirrors Space Station's Off, Solid, Default,
+Custom, Diagonal Flow, Breathing, Gradient, Wave Gradient, Rainbow, and Pulse
+modes with an 18-by-9 preview, brightness, cycle time, direction, and palettes.
+It also reads and applies Space Station's charging and power behavior toggles.
+The core API accepts a full 162-pixel frame for custom designs and animations.
+
 The **Configuration** workspace mirrors Space Station's four-profile layout and
 its Common, Button, Joystick, Gyro, and Trigger option groups. It includes local
 drafts for button assignments, turbo and macros, circularity algorithms,
@@ -102,6 +122,8 @@ Both transports converge on the same `Vader5State` model:
 USB receiver -> Vader5Core / direct IOKit --+
                                              +-> Vader5State
 Bluetooth   -> SDL3 gamepad backend --------+
+
+Charging Station 2 Pro -> Vader5Core / direct IOKit -> 162-pixel RGB frame
 ```
 
 - `Vader5Core` — reusable Swift library for report parsing, receiver I/O, and
@@ -153,6 +175,20 @@ Read the firmware versions currently reported by the connected device:
 
 ```sh
 swift run controllab-cli --firmware
+
+# Inspect or simulate a downloaded package without opening a HID device
+swift run controllab-cli --inspect-firmware /path/to/update.fwpkg
+swift run controllab-cli --simulate-firmware /path/to/update.fwpkg
+```
+
+Control the Charging Station 2 Pro display directly:
+
+```sh
+swift run controllab-cli --dock-status
+swift run controllab-cli --dock-config
+swift run controllab-cli --dock-color 0060FF 75
+swift run controllab-cli --dock-mode gradient
+swift run controllab-cli --dock-off
 ```
 
 Open the packaged GUI:

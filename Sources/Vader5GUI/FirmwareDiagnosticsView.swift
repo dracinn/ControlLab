@@ -19,7 +19,11 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
     @Published var scenario = "Success"
     private var selectedPackage: Data?
 
-    let scenarios = ["Success", "CRC error", "Timeout", "Invalid block", "Flash full"]
+    let scenarios = [
+        "Success", "CRC error", "Timeout", "Invalid block", "Flash full",
+        "Disconnect and recover", "Corrupted packet and retry", "Interrupt and restart",
+        "Unexpected acknowledgement",
+    ]
     func checkFirmware() {
         guard !isCheckingFirmware else { return }
         isCheckingFirmware = true
@@ -100,16 +104,22 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
     }
 
     func runDryRun() {
-        let selected: Vader5SimulationScenario = switch scenario {
-        case "CRC error": .crcError(block: 0)
-        case "Timeout": .timeout(block: 0)
-        case "Invalid block": .invalidBlock(block: 0)
-        case "Flash full": .flashFull(block: 0)
-        default: .success
+        let selection: (Vader5SimulationScenario, Vader5DryRunPolicy) = switch scenario {
+        case "CRC error": (.crcError(block: 0), .init())
+        case "Timeout": (.timeout(block: 0), .init())
+        case "Invalid block": (.invalidBlock(block: 0), .init())
+        case "Flash full": (.flashFull(block: 0), .init())
+        case "Disconnect and recover": (.disconnectOnce(block: 0), .init(maxRecoveryRestarts: 1))
+        case "Corrupted packet and retry": (.corruptedPacketOnce(block: 0), .init(maxPacketRetries: 1))
+        case "Interrupt and restart": (.interrupted(block: 0), .init(maxRecoveryRestarts: 1))
+        case "Unexpected acknowledgement": (.unexpectedAcknowledgement(block: 0), .init())
+        default: (.success, .init())
         }
+        let selected = selection.0
         do {
             let sample = Data((0..<160).map { UInt8($0 & 0xff) })
-            let result = try Vader5DiagnosticUpdater.run(image: selectedPackage ?? sample, scenario: selected)
+            let result = try Vader5DiagnosticUpdater.run(
+                image: selectedPackage ?? sample, scenario: selected, policy: selection.1)
             events = result.events
             errorMessage = nil
         } catch {
@@ -283,6 +293,12 @@ struct FirmwareDiagnosticsView: View {
                     diagnosticRow("Magic", info.magic)
                     diagnosticRow("Container", info.isKnownContainer ? "Known NearLink .fwpkg" : "Unknown")
                     diagnosticRow("SHA-256", info.sha256)
+                    if let layout = info.nearLinkLayout {
+                        diagnosticRow("Subpackage", "\(layout.subpackageMagic) @ 0x\(String(layout.subpackageOffset, radix: 16).uppercased()), \(layout.subpackageLength) bytes")
+                        diagnosticRow("Protected payload", "0x\(String(layout.payloadOffset, radix: 16).uppercased()) + \(layout.payloadLength) bytes")
+                        diagnosticRow("Payload header", layout.payloadHeader)
+                        diagnosticRow("Payload SHA-256", layout.payloadSHA256Matches ? "Verified: \(layout.payloadSHA256)" : "Mismatch: \(layout.payloadSHA256)")
+                    }
                 } else {
                     Text("Read metadata and hashes without extracting or modifying the package.")
                         .foregroundStyle(.secondary)
