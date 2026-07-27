@@ -3,6 +3,12 @@ import AppKit
 import SwiftUI
 import Vader5Core
 
+enum FlydigiDockLightingStatus: Equatable {
+    case checking
+    case ready
+    case unavailable(String)
+}
+
 @MainActor
 final class BridgeViewModel: ObservableObject {
     @Published var mode: Vader5BridgeMode = .monitor
@@ -19,8 +25,21 @@ final class BridgeViewModel: ObservableObject {
     @Published var lightingColors: [Color] = [Color(red: 0, green: 116 / 255, blue: 1)]
     @Published var lightingBrightness: Double = 100
     @Published var lightingPeriod: Double = 50
+    @Published var dockLightingStatus: FlydigiDockLightingStatus = .checking
+    @Published var dockLightingMode: FlydigiDockLightingMode = .solid
+    @Published var dockLightingColors: [Color] = [
+        Color(red: 0, green: 48 / 255, blue: 160 / 255),
+    ]
+    @Published var dockLightingBrightness: Double = 100
+    @Published var dockLightingPeriod: Double = 50
+    @Published var dockLightingDirection: FlydigiDockLightingDirection = .right
+    @Published var dockDeviceSettings = FlydigiDockDeviceSettings()
+    @Published var dockSettingsLoaded = false
+    @Published var isApplyingDockLighting = false
+    @Published var isApplyingDockSettings = false
 
     private let bridge = Vader5Bridge()
+    private let dock = FlydigiDock()
     private struct LightingDraft {
         var colors: [Color]
         var brightness: Double
@@ -41,6 +60,7 @@ final class BridgeViewModel: ObservableObject {
         bridge.onLightingConfiguration = { [weak self] configuration in
             Task { @MainActor in self?.loadLightingConfiguration(configuration) }
         }
+        refreshDockStatus()
     }
 
     var isRunning: Bool {
@@ -87,6 +107,145 @@ final class BridgeViewModel: ObservableObject {
         } catch {
             errorMessage = String(describing: error)
         }
+    }
+
+    var canSetDockLighting: Bool {
+        dockLightingStatus == .ready && !isApplyingDockLighting
+    }
+
+    var canSetDockDeviceSettings: Bool {
+        dockLightingStatus == .ready && dockSettingsLoaded &&
+            !isApplyingDockSettings
+    }
+
+    var availableDockLightingModes: [FlydigiDockLightingMode] {
+        [
+            .deviceDefault, .solid, .diagonalFlow, .breathing, .gradient,
+            .waveGradient, .rainbow, .pulse, .custom, .off,
+        ]
+    }
+
+    func refreshDockStatus() {
+        dockLightingStatus = .checking
+        do {
+            dockLightingStatus = try dock.isConnected()
+                ? .ready
+                : .unavailable("Connect the Charging Station 2 Pro over USB.")
+        } catch {
+            dockLightingStatus = .unavailable(String(describing: error))
+        }
+    }
+
+    func refreshDockConfiguration() {
+        dockLightingStatus = .checking
+        dockSettingsLoaded = false
+        do {
+            let snapshot = try dock.readSnapshot()
+            if let settings = snapshot.settings {
+                dockDeviceSettings = settings
+                dockSettingsLoaded = true
+            }
+            if let configuration = snapshot.lighting {
+                loadDockLightingConfiguration(configuration)
+            }
+            dockLightingStatus = .ready
+        } catch {
+            dockLightingStatus = .unavailable(String(describing: error))
+        }
+    }
+
+    func applyDockLighting() {
+        errorMessage = nil
+        isApplyingDockLighting = true
+        defer { isApplyingDockLighting = false }
+        let nativeColors = dockLightingColors.map(rgbColor)
+        let framePixels = FlydigiDockFrameGenerator.pixels(
+            mode: dockLightingMode,
+            colors: nativeColors,
+            direction: dockLightingDirection)
+        let configuration = FlydigiDockLightingConfiguration(
+            mode: dockLightingMode,
+            period: UInt8(clamping: Int(dockLightingPeriod.rounded())),
+            brightness: UInt8(clamping: Int(dockLightingBrightness.rounded())),
+            colors: dockLightingMode == .custom ? [] : nativeColors,
+            direction: dockLightingDirection,
+            pixels: framePixels)
+        do {
+            try dock.setLighting(configuration)
+            dockLightingStatus = .ready
+        } catch {
+            dockLightingStatus = .unavailable(String(describing: error))
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func turnOffDockLighting() {
+        dockLightingMode = .off
+        applyDockLighting()
+    }
+
+    func applyDockDeviceSettings() {
+        errorMessage = nil
+        isApplyingDockSettings = true
+        defer { isApplyingDockSettings = false }
+        do {
+            try dock.setDeviceSettings(dockDeviceSettings)
+            dockLightingStatus = .ready
+        } catch {
+            dockLightingStatus = .unavailable(String(describing: error))
+            errorMessage = String(describing: error)
+        }
+    }
+
+    func selectDockLightingMode(_ mode: FlydigiDockLightingMode) {
+        dockLightingMode = mode
+        normalizeDockLightingColors()
+    }
+
+    func addDockLightingColor() {
+        guard dockLightingMode.allowsMultipleColors,
+              dockLightingColors.count < 5 else { return }
+        dockLightingColors.append(
+            Color(red: 195 / 255, green: 32 / 255, blue: 230 / 255))
+    }
+
+    func removeDockLightingColor() {
+        guard dockLightingColors.count > dockLightingMode.minimumColorCount
+        else { return }
+        dockLightingColors.removeLast()
+    }
+
+    private func normalizeDockLightingColors() {
+        guard dockLightingMode.usesColors else { return }
+        if dockLightingColors.isEmpty {
+            dockLightingColors = [Color(red: 0, green: 96 / 255, blue: 1)]
+        }
+        while dockLightingColors.count < dockLightingMode.minimumColorCount {
+            dockLightingColors.append(
+                Color(red: 195 / 255, green: 32 / 255, blue: 230 / 255))
+        }
+        if !dockLightingMode.allowsMultipleColors &&
+            dockLightingColors.count > 1 {
+            dockLightingColors = [dockLightingColors[0]]
+        }
+    }
+
+    private func loadDockLightingConfiguration(
+        _ configuration: FlydigiDockLightingConfiguration
+    ) {
+        dockLightingMode = configuration.mode
+        dockLightingBrightness = Double(configuration.brightness)
+        dockLightingPeriod = Double(configuration.period)
+        dockLightingDirection = configuration.direction
+        if !configuration.colors.isEmpty {
+            dockLightingColors = configuration.colors.map {
+                Color(
+                    red: Double($0.red) / 255,
+                    green: Double($0.green) / 255,
+                    blue: Double($0.blue) / 255)
+            }
+        }
+        normalizeDockLightingColors()
     }
 
     var availableLightingModes: [Vader5LightingMode] {

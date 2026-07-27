@@ -20,6 +20,10 @@ cp "${binary}" "${app_dir}/Contents/MacOS/ControlLab"
 cp "${repo_dir}/Resources/Info.plist" "${app_dir}/Contents/Info.plist"
 cp "${repo_dir}/Sources/Vader5GUI/Resources/Vader5Pro-Official.png" \
     "${app_dir}/Contents/Resources/Vader5Pro-Official.png"
+cp "${repo_dir}/Sources/Vader5GUI/Resources/FlydigiDock2Pro-Official.jpg" \
+    "${app_dir}/Contents/Resources/FlydigiDock2Pro-Official.jpg"
+cp "${repo_dir}/Sources/Vader5GUI/Resources/FlydigiDock2Pro-Front.png" \
+    "${app_dir}/Contents/Resources/FlydigiDock2Pro-Front.png"
 cp -R "${sdl_framework}" "${app_dir}/Contents/Frameworks/SDL3.framework"
 cp "${repo_dir}/ThirdPartyNotices/SDL3-LICENSE.txt" \
     "${app_dir}/Contents/Resources/ThirdPartyNotices/SDL3-LICENSE.txt"

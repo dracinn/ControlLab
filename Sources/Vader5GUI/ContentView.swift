@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Vader5Core
 
@@ -258,13 +259,15 @@ struct ContentView: View {
                     lightingEditor
                         .frame(width: 330)
                 }
+                dockLightingEditor
             }
             .padding(20)
         }
+        .onAppear { model.refreshDockConfiguration() }
     }
 
     private var lightingEditor: some View {
-        StudioPanel(title: "Lighting settings", icon: "lightbulb.led.fill") {
+        StudioPanel(title: "Controller lighting", icon: "lightbulb.led.fill") {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 7) {
                     FieldLabel("LIGHTING MODE")
@@ -312,6 +315,205 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large)
                 .disabled(!model.canSetLighting)
+            }
+        }
+    }
+
+    private var dockLightingEditor: some View {
+        StudioPanel(title: "Charging Station 2 Pro", icon: "rectangle.grid.3x2.fill") {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            FieldLabel("DOCK DISPLAY PREVIEW")
+                            Spacer()
+                            Text("3-PIXEL TRIANGLE · 162 PIXELS")
+                                .font(.system(size: 9, weight: .bold))
+                                .tracking(0.8)
+                                .foregroundStyle(.secondary)
+                        }
+                        DockLightingPreview(
+                            mode: model.dockLightingMode,
+                            colors: model.dockLightingColors,
+                            brightness: model.dockLightingBrightness,
+                            period: model.dockLightingPeriod,
+                            direction: model.dockLightingDirection)
+                            .frame(maxWidth: 430)
+                        Text("Near-front Flydigi Dock 2 Pro product image")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                        Text("14-pixel straight runs with three-pixel corner clusters")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 7) {
+                            FieldLabel("LIGHTING MODE")
+                            Picker("Dock lighting mode", selection: Binding(
+                                get: { model.dockLightingMode },
+                                set: { model.selectDockLightingMode($0) })) {
+                                ForEach(model.availableDockLightingModes, id: \.self) {
+                                    Text($0.title).tag($0)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity)
+                            .disabled(!model.canSetDockLighting)
+                        }
+
+                        if model.dockLightingMode.usesColors {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    FieldLabel(model.dockLightingMode == .custom
+                                               ? "FRAME FILL"
+                                               : "COLORS")
+                                    Spacer()
+                                    if model.dockLightingMode.allowsMultipleColors {
+                                        Text("\(model.dockLightingColors.count)/5")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                HStack(spacing: 10) {
+                                    ForEach(model.dockLightingColors.indices, id: \.self) { index in
+                                        ColorPicker(
+                                            "Dock color \(index + 1)",
+                                            selection: $model.dockLightingColors[index],
+                                            supportsOpacity: false)
+                                            .labelsHidden()
+                                    }
+                                    if model.dockLightingMode.allowsMultipleColors {
+                                        Button { model.addDockLightingColor() } label: {
+                                            Image(systemName: "plus")
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(model.dockLightingColors.count >= 5)
+                                        Button { model.removeDockLightingColor() } label: {
+                                            Image(systemName: "minus")
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(model.dockLightingColors.count <=
+                                                  model.dockLightingMode.minimumColorCount)
+                                    }
+                                }
+                            }
+                        }
+
+                        if model.dockLightingMode != .off {
+                            SliderField(
+                                label: "BRIGHTNESS",
+                                value: $model.dockLightingBrightness,
+                                suffix: "%")
+                        }
+                        if model.dockLightingMode.isAnimated {
+                            SliderField(
+                                label: "CYCLE TIME",
+                                value: $model.dockLightingPeriod,
+                                suffix: "")
+                        }
+                        if model.dockLightingMode.usesDirection {
+                            VStack(alignment: .leading, spacing: 7) {
+                                FieldLabel("DIRECTION")
+                                Picker("Direction", selection: $model.dockLightingDirection) {
+                                    ForEach(FlydigiDockLightingDirection.allCases, id: \.self) {
+                                        Text($0.title).tag($0)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(maxWidth: .infinity)
+                            }
+                        }
+
+                        dockLightingMessage
+                        HStack {
+                            Button { model.refreshDockConfiguration() } label: {
+                                Label("Refresh", systemImage: "arrow.clockwise")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(model.isApplyingDockLighting)
+                            Button { model.turnOffDockLighting() } label: {
+                                Label("Turn off", systemImage: "power")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(!model.canSetDockLighting)
+                        }
+                        Button { model.applyDockLighting() } label: {
+                            Label(
+                                model.isApplyingDockLighting ? "Applying…" : "Apply lighting",
+                                systemImage: "sparkles")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(!model.canSetDockLighting)
+                    }
+                    .frame(width: 330)
+                }
+
+                Divider().overlay(CLTheme.border)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            FieldLabel("DEVICE BEHAVIOR")
+                            Text("Space Station charging and power settings")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if !model.dockSettingsLoaded {
+                            Label("Waiting for dock configuration",
+                                  systemImage: "info.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    HStack(spacing: 24) {
+                        Toggle(
+                            "Sleep while charging",
+                            isOn: $model.dockDeviceSettings.sleepWhenCharging)
+                        Toggle(
+                            "Show charging animation",
+                            isOn: $model.dockDeviceSettings.showAnimationWhenCharging)
+                        Toggle(
+                            "LED sync",
+                            isOn: $model.dockDeviceSettings.ledSync)
+                        Toggle(
+                            "Turn off with system",
+                            isOn: $model.dockDeviceSettings.closeWithSystem)
+                    }
+                    .font(.caption)
+                    .disabled(!model.canSetDockDeviceSettings)
+                    Button { model.applyDockDeviceSettings() } label: {
+                        Label(
+                            model.isApplyingDockSettings
+                                ? "Saving behavior…"
+                                : "Apply device behavior",
+                            systemImage: "checkmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!model.canSetDockDeviceSettings)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var dockLightingMessage: some View {
+        if model.isApplyingDockLighting {
+            Label("Sending the 162-pixel frame…", systemImage: "ellipsis.circle")
+                .foregroundStyle(.secondary)
+        } else {
+            switch model.dockLightingStatus {
+            case .checking:
+                Label("Checking the USB dock…", systemImage: "ellipsis.circle")
+                    .foregroundStyle(.secondary)
+            case .ready:
+                Label("USB 37D7:6001", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case .unavailable(let message):
+                Label(message, systemImage: "info.circle")
+                    .foregroundStyle(.secondary)
             }
         }
     }

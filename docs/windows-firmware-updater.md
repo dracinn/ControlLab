@@ -1,6 +1,6 @@
 # Windows firmware updater findings
 
-This note records a static analysis of Flydigi Space Station 4.1.0.31. No
+This note records static analysis of Flydigi Space Station through 4.2.0.9. No
 Windows executable was run and no firmware was written to a device.
 
 ## Update discovery
@@ -16,10 +16,11 @@ request and response format.
 
 Using versions read live from the attached controller over USB on 2026-07-21
 (main `7.1.5.2`, RF `1.0.2.6`, SI `3.5.1.7`, dongle `0.4.6.7`), the service
-reported that main and SI were current. It offered:
+reported that main and SI were current. A refreshed catalog snapshot on
+2026-07-22 offered:
 
-- Dongle `2.1.3.0`: `K5_BS20_Dongle_V2130_DFU.fwpkg`
-- RF `1.1.3.0`: `K5_BS20_Gamepad_V1130_DFU.fwpkg`
+- Dongle `2.1.3.1`: `K5_BS20_Dongle_V2131_DFU.fwpkg`
+- RF `1.1.3.1`: `K5_BS20_Gamepad_V1131_DFU.fwpkg`
 
 ## Windows dispatch
 
@@ -41,9 +42,14 @@ The Windows backend invokes its bundled tool in this form:
 `BurnTool.exe -dfu -pid:0xPID -vid:0xVID -usage:0x1 -usagepage:0xUSAGE -bin:PACKAGE`
 
 RF uses usage page `FFEF`; other modules use `FFEE`. The package begins with
-magic `4e 15 8d cb` and its payload is opaque. The actual NearLink transport is
-inside the native Windows-only `BurnTool.exe` and `libburn.dll`, so it has not
-yet been connected to the macOS app.
+magic `4e 15 8d cb`. Space Station 4.2.0.9's native updater has now been
+recovered without execution. BurnTool decrypts the protected content with
+AES-128-CBC, then `libburn` parses and CRC-checks the decoded partition table.
+The key derivation, boot identity, and exact transport acknowledgements remain
+unresolved, so the NearLink writer has not been connected to the macOS app.
+
+More detailed binary hashes, parser structure, and transport findings are in
+[`nearlink-firmware-analysis.md`](nearlink-firmware-analysis.md).
 
 ## Recovered HID OTA codec
 
