@@ -15,15 +15,16 @@ configuration and SDL's standard gamepad LED API.
 
 ## Frame layout
 
-The display contains 162 RGB pixels, represented in ControlLab as an 18-by-9
-grid. A complete static frame is sent as one initialization report followed by
-ten data reports. Animated modes upload a loop of twelve complete frames; the
-dock advances through that sequence using the configured cycle time.
+The display contains 162 RGB pixels. Space Station renders them as 16 centered
+rows containing `14, 15, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3`
+pixels. A complete static frame is sent as one initialization report followed
+by ten data reports. Space Station's generated animations use 50-frame loops
+(breathing uses a mirrored fade whose exact length depends on cycle time), and
+advances one frame every `20 × cycle-time` milliseconds.
 
-The protocol remains a flat 162-pixel sequence. In the app, those pixels are
-visualized over Flydigi's official Dock 2 Pro render as a three-pixel-thick,
-inverted triangular perimeter with fourteen-pixel straight runs and clustered
-corners, matching the physical front panel.
+The protocol remains a flat 162-pixel sequence. ControlLab projects Space
+Station's exact 16-row layout onto Flydigi's official Dock 2 Pro render. The
+layout is editable and saved as normalized coordinates.
 
 The initialization report begins:
 
@@ -69,10 +70,12 @@ the dock's complete lighting enum:
 
 The direction values are None, Right, Left, Down, Up, Down-right, Up-right,
 Down-left, and Up-left. ControlLab exposes the same mode, brightness, cycle
-time, direction, and palette fields. Static modes include one complete frame,
-while animated modes include a generated twelve-frame loop. Live hardware
-testing showed that the dock acknowledges effect metadata without frames but
-has no animation content to display.
+time, direction, and palette fields. Static modes include one complete frame.
+Animated frames use the equations recovered from Space Station's renderer:
+mirrored linear breathing, full-frame hue cycling, directional sine-wave
+gradients, angular two-color flow, radial pulse, and directional rainbow. Live
+hardware testing showed that the dock acknowledges effect metadata without
+frames but has no animation content to display.
 
 The heartbeat exposes four device settings and the Charger SDK contains matching
 write commands:

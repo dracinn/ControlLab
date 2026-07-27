@@ -5,7 +5,7 @@ private enum ConfigurationTab: String, CaseIterable {
     case common = "Common"
     case button = "Button"
     case joystick = "Joystick"
-    case gyro = "Gyro"
+    case motion = "Motion"
     case trigger = "Trigger"
 
     var icon: String {
@@ -13,7 +13,7 @@ private enum ConfigurationTab: String, CaseIterable {
         case .common: "dial.medium"
         case .button: "button.programmable"
         case .joystick: "circle.grid.cross"
-        case .gyro: "gyroscope"
+        case .motion: "gyroscope"
         case .trigger: "hand.point.up.left.fill"
         }
     }
@@ -30,6 +30,14 @@ private enum MappingKind: String, CaseIterable, Codable { case click = "Click", 
 private enum TurboActivation: String, CaseIterable, Codable { case hold = "Hold for turbo", toggle = "Press to toggle", burst = "Burst" }
 private enum GyroOutput: String, CaseIterable, Codable { case rightStick = "Right joystick", leftStick = "Left joystick", mouse = "Mouse" }
 private enum GyroActivation: String, CaseIterable, Codable { case always = "Always on", hold = "While held", toggle = "Press to toggle" }
+private enum TriggerMode: String, CaseIterable, Codable {
+    case common = "Normal"
+    case racing = "Racing"
+    case sniper = "Sniper"
+    case recoil = "Recoil"
+    case lock = "Trigger lock"
+    case vibration = "Vibration"
+}
 
 private struct StickDraft: Codable, Equatable {
     var circularity: Circularity = .rectangle
@@ -76,8 +84,10 @@ private struct ConfigurationProfile: Codable, Equatable, Identifiable {
     var invertGyroY = false
     var leftTriggerStart = 0.0
     var leftTriggerEnd = 100.0
+    var leftTriggerMode: TriggerMode?
     var rightTriggerStart = 0.0
     var rightTriggerEnd = 100.0
+    var rightTriggerMode: TriggerMode?
     var triggerVibration = true
     var triggerVibrationIntensity = 50.0
 }
@@ -121,23 +131,22 @@ struct ControllerConfigurationView: View {
     @State private var stickSide: StickSide = .left
     @State private var triggerSide: TriggerSide = .left
 
-    private let background = Color(red: 0.055, green: 0.063, blue: 0.078)
-    private let sidebar = Color(red: 0.075, green: 0.084, blue: 0.102)
-    private let surface = Color(red: 0.095, green: 0.106, blue: 0.128)
-    private let border = Color.white.opacity(0.075)
-    private let accent = Color(red: 0.23, green: 0.58, blue: 1)
+    private let background = SpaceStationTheme.darkest
+    private let sidebar = SpaceStationTheme.secondDark
+    private let surface = SpaceStationTheme.thirdDark
+    private let border = SpaceStationTheme.line
+    private let accent = SpaceStationTheme.accent
 
     var body: some View {
         HStack(spacing: 0) {
             profileRail
             ScrollView {
                 VStack(spacing: 0) {
-                    ControllerInputView(state: state)
-                        .frame(height: 275)
-                        .padding(.horizontal, 36)
+                    controllerHero
                     tabBar
                     settingsContent
-                        .padding(22)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 36)
                 }
             }
         }
@@ -148,6 +157,45 @@ struct ControllerConfigurationView: View {
 
     private var profileBinding: Binding<ConfigurationProfile> {
         $model.profiles[model.selectedProfile]
+    }
+
+    private var controllerHero: some View {
+        ZStack {
+            background
+            Ellipse()
+                .fill(accent.opacity(0.42))
+                .frame(width: 720, height: 92)
+                .blur(radius: 70)
+                .offset(y: 132)
+            ControllerInputView(state: state)
+                .frame(height: 324)
+                .padding(.horizontal, 34)
+            VStack {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("VADER 5 PRO")
+                            .font(.system(size: 10, weight: .bold))
+                            .tracking(1.3)
+                            .foregroundStyle(SpaceStationTheme.secondaryText)
+                        Text(model.profiles[model.selectedProfile].name)
+                            .font(.title3.weight(.medium))
+                    }
+                    Spacer()
+                    Label("Onboard \(model.selectedProfile + 1)",
+                          systemImage: "memorychip")
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .frame(height: 32)
+                        .background(surface, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(border))
+                }
+                Spacer()
+            }
+            .padding(20)
+        }
+        .frame(height: 340)
+        .clipped()
     }
 
     private var profileRail: some View {
@@ -173,6 +221,18 @@ struct ControllerConfigurationView: View {
                 .buttonStyle(.plain)
             }
 
+            Text("PROFILE NAME")
+                .font(.system(size: 9, weight: .bold))
+                .tracking(1)
+                .foregroundStyle(SpaceStationTheme.secondaryText)
+                .padding(.top, 8)
+            TextField("Profile name", text: profileBinding.name)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 34)
+                .background(background, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(border))
+
             Toggle("Fast swap", isOn: profileBinding.fastSwap)
                 .font(.caption).padding(.top, 8)
             Divider().overlay(border).padding(.vertical, 4)
@@ -184,7 +244,7 @@ struct ControllerConfigurationView: View {
             Button("Apply to controller") {}
                 .buttonStyle(.borderedProminent).frame(maxWidth: .infinity).disabled(true)
         }
-        .padding(14).frame(width: 190)
+        .padding(14).frame(width: 184)
         .background(sidebar)
         .overlay(alignment: .trailing) { Rectangle().fill(border).frame(width: 1) }
     }
@@ -194,10 +254,16 @@ struct ControllerConfigurationView: View {
             ForEach(ConfigurationTab.allCases, id: \.self) { item in
                 Button { tab = item } label: {
                     Label(item.rawValue, systemImage: item.icon)
-                        .font(.caption.weight(.semibold)).frame(maxWidth: .infinity).frame(height: 42)
+                        .font(.caption.weight(.semibold)).frame(maxWidth: .infinity).frame(height: 36)
                         .foregroundStyle(tab == item ? .white : .secondary)
                         .background(alignment: .bottom) {
-                            if tab == item { Rectangle().fill(accent).frame(height: 2) }
+                            if tab == item {
+                                LinearGradient(
+                                    colors: [.clear, accent, .clear],
+                                    startPoint: .leading,
+                                    endPoint: .trailing)
+                                    .frame(height: 2)
+                            }
                         }
                 }
                 .buttonStyle(.plain)
@@ -213,7 +279,7 @@ struct ControllerConfigurationView: View {
         case .common: commonSettings
         case .button: buttonSettings
         case .joystick: joystickSettings
-        case .gyro: gyroSettings
+        case .motion: gyroSettings
         case .trigger: triggerSettings
         }
     }
@@ -357,7 +423,16 @@ struct ControllerConfigurationView: View {
             Picker("Trigger", selection: $triggerSide) {
                 ForEach(TriggerSide.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.segmented).frame(maxWidth: 330)
-            HStack(alignment: .top, spacing: 16) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 260), spacing: 24)],
+                alignment: .leading,
+                spacing: 24
+            ) {
+                ConfigPanel(title: "Trigger mode", icon: "hand.point.up.left.fill") {
+                    ConfigPicker(title: "Mode", selection: triggerModeBinding)
+                    TriggerModePreview(mode: triggerModeBinding.wrappedValue)
+                    HelpRow(triggerModeDescription)
+                }
                 ConfigPanel(title: "Trigger active range", icon: "slider.horizontal.below.rectangle") {
                     ConfigSlider(title: "Start point", value: triggerStartBinding, range: 0...99, suffix: "%")
                     ConfigSlider(title: "End point", value: triggerEndBinding, range: 1...100, suffix: "%")
@@ -370,7 +445,7 @@ struct ControllerConfigurationView: View {
                         .disabled(!profileBinding.wrappedValue.triggerVibration)
                     Button("Vibration test") {}.buttonStyle(.bordered).disabled(true)
                 }
-                ConfigPanel(title: "Live trigger", icon: "gauge.with.dots.needle.33percent") {
+                ConfigPanel(title: "Live input", icon: "gauge.with.dots.needle.33percent") {
                     ProgressView(value: Double(triggerSide == .left ? state.leftTrigger : state.rightTrigger), total: 255)
                         .tint(accent)
                     Text("\(triggerSide == .left ? state.leftTrigger : state.rightTrigger) / 255")
@@ -386,6 +461,36 @@ struct ControllerConfigurationView: View {
 
     private var triggerEndBinding: Binding<Double> {
         triggerSide == .left ? profileBinding.leftTriggerEnd : profileBinding.rightTriggerEnd
+    }
+
+    private var triggerModeBinding: Binding<TriggerMode> {
+        Binding(
+            get: {
+                if triggerSide == .left {
+                    return profileBinding.wrappedValue.leftTriggerMode ?? .common
+                }
+                return profileBinding.wrappedValue.rightTriggerMode ?? .common
+            },
+            set: { mode in
+                var profile = profileBinding.wrappedValue
+                if triggerSide == .left {
+                    profile.leftTriggerMode = mode
+                } else {
+                    profile.rightTriggerMode = mode
+                }
+                profileBinding.wrappedValue = profile
+            })
+    }
+
+    private var triggerModeDescription: String {
+        switch triggerModeBinding.wrappedValue {
+        case .common: "Linear travel using the selected active range."
+        case .racing: "Progressive resistance intended for throttle and braking."
+        case .sniper: "A short, controlled pull for precise activation."
+        case .recoil: "Simulated repeated resistance for automatic fire."
+        case .lock: "Restricts the trigger to a short digital-style pull."
+        case .vibration: "Adds trigger vibration across the active range."
+        }
     }
 
     private let buttonNames = ["A", "B", "X", "Y", "C", "Z", "LB", "RB", "LT", "RT", "L3", "R3", "M1", "M2", "M3", "M4", "LM", "RM", "View", "Menu", "Home", "Fn"]
@@ -407,8 +512,47 @@ private struct ConfigPanel<Content: View>: View {
             content
         }
         .padding(16).frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(Color(red: 0.095, green: 0.106, blue: 0.128), in: RoundedRectangle(cornerRadius: 13))
-        .overlay(RoundedRectangle(cornerRadius: 13).stroke(Color.white.opacity(0.075)))
+        .background(SpaceStationTheme.thirdDark,
+                    in: RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius))
+        .overlay(RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius)
+            .stroke(SpaceStationTheme.line))
+    }
+}
+
+private struct TriggerModePreview: View {
+    let mode: TriggerMode
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.08)).frame(height: 6)
+                Capsule()
+                    .fill(SpaceStationTheme.accent)
+                    .frame(width: fillWidth, height: 6)
+            }
+            HStack {
+                Text("TRAVEL")
+                Spacer()
+                Text(mode.rawValue.uppercased())
+            }
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.7)
+            .foregroundStyle(SpaceStationTheme.secondaryText)
+        }
+        .padding(12)
+        .background(SpaceStationTheme.darkest,
+                    in: RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius))
+    }
+
+    private var fillWidth: CGFloat {
+        switch mode {
+        case .common: 210
+        case .racing: 180
+        case .sniper: 90
+        case .recoil: 145
+        case .lock: 58
+        case .vibration: 170
+        }
     }
 }
 
@@ -436,7 +580,15 @@ private struct ConfigPicker<Value: Hashable & RawRepresentable>: View where Valu
             Text(title).font(.caption).foregroundStyle(.secondary)
             Picker(title, selection: $selection) {
                 ForEach(Array(Value.allCases), id: \.self) { Text($0.rawValue).tag($0) }
-            }.labelsHidden().frame(maxWidth: .infinity)
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .background(SpaceStationTheme.darkest,
+                        in: RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius))
+            .overlay(RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius)
+                .stroke(SpaceStationTheme.line))
         }
     }
 }
@@ -450,7 +602,15 @@ private struct ConfigStringPicker: View {
             Text(title).font(.caption).foregroundStyle(.secondary)
             Picker(title, selection: $selection) {
                 ForEach(values, id: \.self) { Text($0).tag($0) }
-            }.labelsHidden().frame(maxWidth: .infinity)
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .background(SpaceStationTheme.darkest,
+                        in: RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius))
+            .overlay(RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius)
+                .stroke(SpaceStationTheme.line))
         }
     }
 }
@@ -461,7 +621,14 @@ private struct ConfigField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            TextField(title, text: $text).textFieldStyle(.roundedBorder)
+            TextField(title, text: $text)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 36)
+                .background(SpaceStationTheme.darkest,
+                            in: RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius))
+                .overlay(RoundedRectangle(cornerRadius: SpaceStationTheme.smallRadius)
+                    .stroke(SpaceStationTheme.line))
         }
     }
 }

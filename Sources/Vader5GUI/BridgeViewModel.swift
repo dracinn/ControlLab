@@ -34,9 +34,12 @@ final class BridgeViewModel: ObservableObject {
     @Published var dockLightingPeriod: Double = 50
     @Published var dockLightingDirection: FlydigiDockLightingDirection = .right
     @Published var dockDeviceSettings = FlydigiDockDeviceSettings()
+    @Published var dockDeviceType: UInt8?
+    @Published var dockFactoryLighting: FlydigiDockLightingConfiguration?
     @Published var dockSettingsLoaded = false
     @Published var isApplyingDockLighting = false
     @Published var isApplyingDockSettings = false
+    @Published var isApplyingLighting = false
 
     private let bridge = Vader5Bridge()
     private let dock = FlydigiDock()
@@ -48,6 +51,7 @@ final class BridgeViewModel: ObservableObject {
     private var lightingDrafts: [Vader5LightingMode: LightingDraft] = [:]
 
     init() {
+        loadDockFactoryLighting(deviceType: 0)
         bridge.onStatus = { [weak self] status in
             Task { @MainActor in self?.status = status }
         }
@@ -91,26 +95,34 @@ final class BridgeViewModel: ObservableObject {
     func stop() { bridge.stop() }
 
     var canSetLighting: Bool {
-        if case .ready = lightingStatus { return isRunning }
+        if case .ready = lightingStatus {
+            return isRunning && !isApplyingLighting
+        }
         return false
     }
 
     func applyLighting() {
         errorMessage = nil
         saveLightingDraft()
-        do {
-            try bridge.setLighting(.init(
-                mode: lightingMode,
-                colors: lightingColors.map(rgbColor),
-                brightness: UInt8(clamping: Int(lightingBrightness.rounded())),
-                period: UInt8(clamping: Int(lightingPeriod.rounded()))))
-        } catch {
-            errorMessage = String(describing: error)
+        let configuration = Vader5LightingConfiguration(
+            mode: lightingMode,
+            colors: lightingColors.map(rgbColor),
+            brightness: UInt8(clamping: Int(lightingBrightness.rounded())),
+            period: UInt8(clamping: Int(lightingPeriod.rounded())))
+        isApplyingLighting = true
+        Task {
+            defer { isApplyingLighting = false }
+            do {
+                try await bridge.setLightingAsync(configuration)
+            } catch {
+                errorMessage = String(describing: error)
+            }
         }
     }
 
     var canSetDockLighting: Bool {
-        dockLightingStatus == .ready && !isApplyingDockLighting
+        dockLightingStatus == .ready && !isApplyingDockLighting &&
+            (dockLightingMode != .deviceDefault || dockFactoryLighting != nil)
     }
 
     var canSetDockDeviceSettings: Bool {
@@ -141,6 +153,10 @@ final class BridgeViewModel: ObservableObject {
         dockSettingsLoaded = false
         do {
             let snapshot = try dock.readSnapshot()
+            if let deviceType = snapshot.deviceType {
+                dockDeviceType = deviceType
+                loadDockFactoryLighting(deviceType: deviceType)
+            }
             if let settings = snapshot.settings {
                 dockDeviceSettings = settings
                 dockSettingsLoaded = true
@@ -156,26 +172,48 @@ final class BridgeViewModel: ObservableObject {
 
     func applyDockLighting() {
         errorMessage = nil
+        let configuration: FlydigiDockLightingConfiguration
+        if dockLightingMode == .deviceDefault {
+            guard let factory = dockFactoryLighting else {
+                let message =
+                    "No validated factory animation is available for this dock variant."
+                dockLightingStatus = .unavailable(message)
+                errorMessage = message
+                return
+            }
+            configuration = factory
+        } else {
+            let nativeColors = dockLightingMode.usesColors
+                ? dockLightingColors.map(rgbColor)
+                : []
+            let framePixels = FlydigiDockFrameGenerator.pixels(
+                mode: dockLightingMode,
+                colors: nativeColors,
+                direction: dockLightingDirection)
+            configuration = FlydigiDockLightingConfiguration(
+                mode: dockLightingMode,
+                period: UInt8(clamping: Int(dockLightingPeriod.rounded())),
+                brightness: UInt8(clamping: Int(dockLightingBrightness.rounded())),
+                colors: dockLightingMode == .custom ? [] : nativeColors,
+                direction: dockLightingDirection,
+                pixels: framePixels)
+        }
+
         isApplyingDockLighting = true
-        defer { isApplyingDockLighting = false }
-        let nativeColors = dockLightingColors.map(rgbColor)
-        let framePixels = FlydigiDockFrameGenerator.pixels(
-            mode: dockLightingMode,
-            colors: nativeColors,
-            direction: dockLightingDirection)
-        let configuration = FlydigiDockLightingConfiguration(
-            mode: dockLightingMode,
-            period: UInt8(clamping: Int(dockLightingPeriod.rounded())),
-            brightness: UInt8(clamping: Int(dockLightingBrightness.rounded())),
-            colors: dockLightingMode == .custom ? [] : nativeColors,
-            direction: dockLightingDirection,
-            pixels: framePixels)
-        do {
-            try dock.setLighting(configuration)
-            dockLightingStatus = .ready
-        } catch {
-            dockLightingStatus = .unavailable(String(describing: error))
-            errorMessage = String(describing: error)
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Result {
+                    try FlydigiDock().setLighting(configuration)
+                }
+            }.value
+            isApplyingDockLighting = false
+            switch result {
+            case .success:
+                dockLightingStatus = .ready
+            case .failure(let error):
+                dockLightingStatus = .unavailable(String(describing: error))
+                errorMessage = String(describing: error)
+            }
         }
     }
 
@@ -199,12 +237,25 @@ final class BridgeViewModel: ObservableObject {
 
     func selectDockLightingMode(_ mode: FlydigiDockLightingMode) {
         dockLightingMode = mode
+        if mode == .deviceDefault, let factory = dockFactoryLighting {
+            loadDockLightingConfiguration(factory)
+            return
+        }
+        dockLightingPeriod = Double(mode.defaultPeriod)
+        dockLightingDirection = mode.usesDirection ? .right : .none
+        if mode == .diagonalFlow || mode == .waveGradient {
+            dockLightingColors = [
+                Color(red: 195 / 255, green: 32 / 255, blue: 230 / 255),
+                Color(red: 22 / 255, green: 230 / 255, blue: 249 / 255),
+            ]
+        }
         normalizeDockLightingColors()
     }
 
     func addDockLightingColor() {
         guard dockLightingMode.allowsMultipleColors,
-              dockLightingColors.count < 5 else { return }
+              dockLightingColors.count < dockLightingMode.maximumColorCount
+        else { return }
         dockLightingColors.append(
             Color(red: 195 / 255, green: 32 / 255, blue: 230 / 255))
     }
@@ -224,9 +275,9 @@ final class BridgeViewModel: ObservableObject {
             dockLightingColors.append(
                 Color(red: 195 / 255, green: 32 / 255, blue: 230 / 255))
         }
-        if !dockLightingMode.allowsMultipleColors &&
-            dockLightingColors.count > 1 {
-            dockLightingColors = [dockLightingColors[0]]
+        if dockLightingColors.count > dockLightingMode.maximumColorCount {
+            dockLightingColors = Array(
+                dockLightingColors.prefix(dockLightingMode.maximumColorCount))
         }
     }
 
@@ -246,6 +297,26 @@ final class BridgeViewModel: ObservableObject {
             }
         }
         normalizeDockLightingColors()
+    }
+
+    private func loadDockFactoryLighting(deviceType: UInt8) {
+        do {
+            let configuration = try DockFactoryLightingStore.configuration(
+                deviceType: deviceType)
+            guard configuration.mode == .deviceDefault else {
+                throw FlydigiDockFactoryLightingError.unsupportedMode(
+                    Int(configuration.mode.rawValue))
+            }
+            dockFactoryLighting = configuration
+            if dockLightingMode == .deviceDefault {
+                loadDockLightingConfiguration(configuration)
+            }
+        } catch {
+            dockFactoryLighting = nil
+            if dockLightingMode == .deviceDefault {
+                errorMessage = String(describing: error)
+            }
+        }
     }
 
     var availableLightingModes: [Vader5LightingMode] {

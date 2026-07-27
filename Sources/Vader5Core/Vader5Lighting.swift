@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Vader5RGBColor: Sendable, Equatable {
+public struct Vader5RGBColor: Codable, Sendable, Equatable {
     public var red: UInt8
     public var green: UInt8
     public var blue: UInt8

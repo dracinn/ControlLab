@@ -167,14 +167,14 @@ public final class FlydigiDock {
                         mode: .default,
                         before: min(deadline, Date().addingTimeInterval(0.01)))
                 }
-                guard let acknowledgement else {
+                guard acknowledgement != nil else {
                     throw FlydigiDockError.acknowledgementTimeout(
                         command: command)
                 }
-                if acknowledgement.count > 4, acknowledgement[4] != 0 {
-                    throw FlydigiDockError.commandRejected(
-                        command: command, status: acknowledgement[4])
-                }
+                // Space Station's Charger SDK accepts an acknowledgement when
+                // its command byte matches. Byte 4 is command-specific data
+                // (the 0x62 packet acknowledgement uses it as an index), not a
+                // universal success status.
             }
         }
     }

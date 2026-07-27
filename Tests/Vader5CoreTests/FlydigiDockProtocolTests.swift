@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Vader5Core
 
@@ -130,6 +131,50 @@ import Testing
     #expect(solid.allSatisfy { $0 == colors[0] })
 }
 
+@Test func matchesSpaceStationDockMatrixAndFiftyFrameEffects() {
+    #expect(FlydigiDockFrameGenerator.rowPixelCounts == [
+        14, 15, 16, 15, 14, 13, 12, 11,
+        10, 9, 8, 7, 6, 5, 4, 3,
+    ])
+    #expect(FlydigiDockFrameGenerator.rowPixelCounts.reduce(0, +) ==
+            FlydigiDockProtocol.pixelCount)
+
+    let gradient = FlydigiDockFrameGenerator.pixels(
+        mode: .gradient,
+        colors: [],
+        direction: .none)
+    #expect(gradient.count == 50 * FlydigiDockProtocol.pixelCount)
+    #expect(gradient[0] == .init(red: 255, green: 0, blue: 0))
+    #expect(gradient[25 * FlydigiDockProtocol.pixelCount] ==
+            .init(red: 0, green: 255, blue: 255))
+}
+
+@Test func matchesSpaceStationRainbowDirectionAndFrameTiming() {
+    let rainbow = FlydigiDockFrameGenerator.pixels(
+        mode: .rainbow,
+        colors: [],
+        direction: .right)
+    #expect(rainbow[0] == .init(red: 255, green: 0, blue: 0))
+    #expect(rainbow[7] == .init(red: 0, green: 255, blue: 255))
+    #expect(FlydigiDockFrameGenerator.frameInterval(period: 1) == 0.020)
+    #expect(FlydigiDockFrameGenerator.frameInterval(period: 5) == 0.100)
+}
+
+@Test func matchesSpaceStationBreathingFadeAndModeOptions() {
+    let breathing = FlydigiDockFrameGenerator.pixels(
+        mode: .breathing,
+        colors: [.init(red: 100, green: 50, blue: 25)],
+        direction: .none)
+    #expect(breathing[0] == .init(red: 100, green: 50, blue: 25))
+    #expect(breathing[FlydigiDockProtocol.pixelCount] ==
+            .init(red: 98, green: 49, blue: 24))
+    #expect(breathing.count.isMultiple(of: FlydigiDockProtocol.pixelCount))
+    #expect(FlydigiDockLightingMode.diagonalFlow.minimumColorCount == 2)
+    #expect(FlydigiDockLightingMode.waveGradient.maximumColorCount == 2)
+    #expect(!FlydigiDockLightingMode.gradient.usesColors)
+    #expect(FlydigiDockLightingMode.rainbow.usesDirection)
+}
+
 @Test func rejectsPartialDockAnimationFrame() {
     #expect(throws: FlydigiDockProtocolError.self) {
         try FlydigiDockProtocol.reports(configuration: .init(
@@ -156,6 +201,8 @@ import Testing
 @Test func parsesSpaceStationDockSnapshot() {
     var heartbeat = [UInt8](repeating: 0, count: 64)
     heartbeat[0...2] = [0x5a, 0xa5, 0x01]
+    heartbeat[6] = 3
+    heartbeat[16...17] = [0x12, 0x34]
     heartbeat[18...21] = [1, 0, 1, 1]
 
     var lighting = [UInt8](repeating: 0, count: 64)
@@ -163,6 +210,8 @@ import Testing
     lighting[9...14] = [255, 0, 0, 0, 0, 255]
 
     let snapshot = FlydigiDockProtocol.parseSnapshot([heartbeat, lighting])
+    #expect(snapshot.deviceType == 3)
+    #expect(snapshot.firmwareVersion == "1.2.3.4")
     #expect(snapshot.settings == .init(
         sleepWhenCharging: true,
         ledSync: false,
@@ -176,4 +225,34 @@ import Testing
         .init(red: 255, green: 0, blue: 0),
         .init(red: 0, green: 0, blue: 255),
     ])
+}
+
+@Test func decodesAndValidatesEverySpaceStationFactoryDockAnimation() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let resources = repository
+        .appendingPathComponent("Sources/Vader5GUI/Resources/FlydigiDockDefaults")
+
+    for deviceType in 0...4 {
+        let data = try Data(contentsOf: resources.appendingPathComponent(
+            "default_mapping_\(deviceType).dat"))
+        let configuration = try FlydigiDockFactoryLighting.decode(data)
+        #expect(configuration.mode == .deviceDefault)
+        #expect(!configuration.pixels.isEmpty)
+        #expect(configuration.pixels.count.isMultiple(
+            of: FlydigiDockProtocol.pixelCount))
+        #expect(configuration.pixels.count / FlydigiDockProtocol.pixelCount <= 255)
+        #expect(try !FlydigiDockProtocol.reports(
+            configuration: configuration).isEmpty)
+    }
+}
+
+@Test func refusesAnEmptyDefaultDockPayload() {
+    #expect(throws: FlydigiDockProtocolError.self) {
+        try FlydigiDockProtocol.reports(configuration: .init(
+            mode: .deviceDefault,
+            pixels: []))
+    }
 }
