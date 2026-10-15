@@ -46,8 +46,13 @@ if [[ -n "${SIGNING_IDENTITY:-}" ]]; then
         "${app_dir}/Contents/Frameworks/SDL3.framework"
     codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" \
         "${app_dir}/Contents/MacOS/ControlLabRGBPreview"
-    codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" \
-        --entitlements "${repo_dir}/ControlLab.entitlements" "${app_dir}"
+    if [[ -n "${ENTITLEMENTS_FILE:-}" ]]; then
+        codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" \
+            --entitlements "${ENTITLEMENTS_FILE}" "${app_dir}"
+    else
+        codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" \
+            "${app_dir}"
+    fi
 else
     codesign --force --sign - "${app_dir}/Contents/Frameworks/SDL3.framework"
     codesign --force --sign - "${app_dir}/Contents/MacOS/ControlLabRGBPreview"

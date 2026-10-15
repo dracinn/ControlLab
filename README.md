@@ -236,7 +236,8 @@ Linux driver and verified against physical hardware on macOS.
 
 ## License
 
-ControlLab is MIT licensed. SDL3 is distributed under the zlib license; its
-license is included at `ThirdPartyNotices/SDL3-LICENSE.txt` and in packaged apps.
-The official Vader 5 Pro render is copyright Flydigi and is excluded from the
-MIT license; see `ThirdPartyNotices/FLYDIGI-ASSET-NOTICE.md`.
+ControlLab is licensed under the GNU Affero General Public License v3.0 or
+later (AGPL-3.0-or-later); see `LICENSE`. SDL3 is distributed under the zlib
+license; its license is included at `ThirdPartyNotices/SDL3-LICENSE.txt` and
+in packaged apps. The official Vader 5 Pro render is copyright Flydigi and is
+excluded from the AGPL; see `ThirdPartyNotices/FLYDIGI-ASSET-NOTICE.md`.
