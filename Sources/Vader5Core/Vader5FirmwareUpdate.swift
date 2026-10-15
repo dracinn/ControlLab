@@ -114,8 +114,8 @@ public struct Vader5FirmwareDownloadClient: Sendable {
 
 public struct Vader5FirmwareUpdateClient: Sendable {
     public static let endpoint = URL(string: "https://api.flydigi.com/pc/Update/firmware")!
-    public static let deviceCode = "k5"
-    public static let standardDeviceID = 128
+    public static let deviceCode = "f5"
+    public static let standardDeviceID = 130
 
     private let session: URLSession
 

@@ -25,16 +25,28 @@ packages, and runs an in-memory OTA simulator. Downloads are storage-only;
 attempts to request a real firmware update are refused. The app does not switch
 USB modes, erase, or write controller firmware.
 
+The Vader 5 Pro identifies as device code `f5`, device ID `130` (`DeviceType`
+`0x82`). Its receiver dongle is a Telink-based chip updated through the
+`0xFFEE` HID interface using the OTA protocol in
+[`docs/windows-firmware-updater.md`](docs/windows-firmware-updater.md):
+report ID `5`, a `05 02 02` start frame, up to three CRC-16/MODBUS-protected
+16-byte records per `05 02 3C` data frame, and a `05 02 06` finish frame whose
+`05 02 03` completion reports `0x00` on success. This path was verified
+end-to-end on hardware, including a full version-parity commit that returned
+success and left the device healthy; a deliberately truncated transfer was
+rejected with `0x0B` without committing. (`k5`/`128` and the NearLink BurnTool
+`.fwpkg` path belong to the Apex 5, not this device.)
+
 Flydigi currently returns package links using HTTP. The downloader upgrades the
 known `api-web.cdn.flydigi.com` host to its working HTTPS endpoint and rejects
 unrecognized insecure download hosts.
 
 > [!IMPORTANT]
-> The firmware update process still requires testing on Windows with the official
-> Flydigi application. In particular, the NearLink `SwitchUsb` transition,
-> boot-mode USB identity, `.fwpkg` validation, acknowledgements, failure recovery,
-> and rollback behavior must be captured and verified before real firmware writes
-> are enabled on macOS. Do not use Firmware Diagnostics as a production updater.
+> Although the dongle OTA protocol is now verified on hardware — including a
+> real commit — the in-app updater remains a diagnostics tool. Real firmware
+> writes are still refused until the write path is deliberately enabled with
+> progress reporting and interruption handling. Do not use Firmware
+> Diagnostics as a production updater.
 
 ## Hardware
 
