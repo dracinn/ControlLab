@@ -2,7 +2,7 @@ import Foundation
 import IOKit.hid
 
 public enum Vader5DongleUpdateError: Error, CustomStringConvertible, Sendable {
-    case notFound
+    case notFound(target: Vader5DongleUpdater.Target)
     case managerOpen(IOReturn)
     case deviceOpen(IOReturn)
     case writeFailed(IOReturn)
@@ -15,24 +15,24 @@ public enum Vader5DongleUpdateError: Error, CustomStringConvertible, Sendable {
 
     public var description: String {
         switch self {
-        case .notFound:
-            "The Flydigi FFEE update channel was not found. Connect the USB receiver and try again."
+        case let .notFound(target):
+            "The Flydigi \(target.channelName) update channel was not found. \(target.connectionHint)"
         case let .managerOpen(code):
             "Could not open HID manager (0x\(String(UInt32(bitPattern: code), radix: 16)))."
         case let .deviceOpen(code):
-            "Could not open the FFEE update channel (0x\(String(UInt32(bitPattern: code), radix: 16)))."
+            "Could not open the update channel (0x\(String(UInt32(bitPattern: code), radix: 16)))."
         case let .writeFailed(code):
             "An OTA report write failed (0x\(String(UInt32(bitPattern: code), radix: 16)))."
         case let .echoTimeout(stage):
-            "The receiver stopped acknowledging OTA frames during \(stage)."
+            "The device stopped acknowledging OTA frames during \(stage)."
         case .completionTimeout:
-            "The receiver did not return an OTA completion status."
+            "The device did not return an OTA completion status."
         case let .updateRejected(status):
-            "The receiver rejected the update (status 0x\(String(status, radix: 16)))."
+            "The device rejected the update (status 0x\(String(status, radix: 16)))."
         case .unexpectedResponse:
-            "The receiver returned an unexpected OTA response."
+            "The device returned an unexpected OTA response."
         case let .invalidImage(reason):
-            "Not a valid Telink dongle image: \(reason)."
+            "Not a valid Telink image: \(reason)."
         case .imageTooLarge:
             "The image exceeds the recovered 16-bit OTA block address space."
         }
@@ -47,24 +47,88 @@ public enum Vader5DongleUpdatePhase: Sendable, Equatable {
     case completed
 }
 
-/// Performs a real Telink HID OTA update of the receiver dongle over the
-/// 0xFFEE interface. This is the path verified end-to-end on hardware:
-/// start frame, data frames paced by echo acknowledgements, then the finish
-/// frame whose completion report carries the commit status.
+/// Performs a real Telink HID OTA update over the device's update interface:
+/// the receiver dongle on usage page 0xFFEE, or the cabled controller's RF
+/// chip on 0xFFEF. This is the path verified end-to-end on hardware: start
+/// frame, data frames paced by echo acknowledgements, then the finish frame
+/// whose completion report carries the commit status.
 ///
 /// Call `update(image:)` from a thread that can block; it runs its own
-/// CFRunLoop while transferring. The receiver validates the image before
+/// CFRunLoop while transferring. The chip validates the image before
 /// swapping, so an interrupted transfer leaves the running firmware intact.
 public final class Vader5DongleUpdater: @unchecked Sendable {
+    public enum Target: Sendable, Equatable {
+        /// Receiver dongle Telink chip, on the receiver's 0xFFEE interface.
+        case dongle
+        /// Controller RF Telink chip, on the cabled controller's 0xFFEF
+        /// interface.
+        case controllerRF
+
+        public var usagePage: Int {
+            switch self {
+            case .dongle: Vader5HIDOTAProtocol.moduleUsagePage
+            case .controllerRF: Vader5HIDOTAProtocol.controllerUsagePage
+            }
+        }
+
+        public var channelName: String {
+            switch self {
+            case .dongle: "FFEE"
+            case .controllerRF: "FFEF"
+            }
+        }
+
+        public var displayName: String {
+            switch self {
+            case .dongle: "dongle"
+            case .controllerRF: "controller RF"
+            }
+        }
+
+        var connectionHint: String {
+            switch self {
+            case .dongle:
+                "Connect the USB receiver and try again."
+            case .controllerRF:
+                "Connect the controller over USB-C and try again."
+            }
+        }
+    }
+
     public var onEvent: (@Sendable (Vader5DiagnosticEvent) -> Void)?
     public var onPhase: (@Sendable (Vader5DongleUpdatePhase) -> Void)?
 
+    private let target: Target
     private let echoTimeout: TimeInterval
     private let completionTimeout: TimeInterval
 
-    public init(echoTimeout: TimeInterval = 1.5, completionTimeout: TimeInterval = 15) {
+    public init(
+        target: Target = .dongle,
+        echoTimeout: TimeInterval = 1.5,
+        completionTimeout: TimeInterval = 15
+    ) {
+        self.target = target
         self.echoTimeout = echoTimeout
         self.completionTimeout = completionTimeout
+    }
+
+    /// Whether the target's update interface is currently enumerated.
+    public static func isChannelPresent(target: Target) -> Bool {
+        let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        IOHIDManagerSetDeviceMatching(manager, [
+            kIOHIDVendorIDKey: Vader5Protocol.vendorID,
+            kIOHIDProductIDKey: Vader5Protocol.productID,
+            kIOHIDPrimaryUsagePageKey: target.usagePage,
+            kIOHIDPrimaryUsageKey: 0,
+        ] as CFDictionary)
+        guard IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess else {
+            return false
+        }
+        defer { IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone)) }
+        guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
+            return false
+        }
+        return !devices.isEmpty
     }
 
     public static func validate(image: Data) throws {
@@ -91,7 +155,7 @@ public final class Vader5DongleUpdater: @unchecked Sendable {
         IOHIDManagerSetDeviceMatching(manager, [
             kIOHIDVendorIDKey: Vader5Protocol.vendorID,
             kIOHIDProductIDKey: Vader5Protocol.productID,
-            kIOHIDPrimaryUsagePageKey: Vader5HIDOTAProtocol.moduleUsagePage,
+            kIOHIDPrimaryUsagePageKey: target.usagePage,
             kIOHIDPrimaryUsageKey: 0,
         ] as CFDictionary)
 
@@ -103,7 +167,7 @@ public final class Vader5DongleUpdater: @unchecked Sendable {
 
         guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice>,
               let device = devices.first else {
-            throw Vader5DongleUpdateError.notFound
+            throw Vader5DongleUpdateError.notFound(target: target)
         }
         let deviceResult = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
         guard deviceResult == kIOReturnSuccess else {

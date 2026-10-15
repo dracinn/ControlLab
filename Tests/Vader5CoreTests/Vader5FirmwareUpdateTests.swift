@@ -278,3 +278,13 @@ import Testing
         try Vader5DongleUpdater.validate(image: wrongSize)
     }
 }
+
+@Test func updateTargetsSelectDistinctUsagePages() {
+    #expect(Vader5DongleUpdater.Target.dongle.usagePage == Vader5HIDOTAProtocol.moduleUsagePage)
+    #expect(Vader5DongleUpdater.Target.controllerRF.usagePage == Vader5HIDOTAProtocol.controllerUsagePage)
+    #expect(Vader5DongleUpdater.Target.dongle.usagePage != Vader5DongleUpdater.Target.controllerRF.usagePage)
+
+    let error = Vader5DongleUpdateError.notFound(target: .controllerRF)
+    #expect(error.description.contains("FFEF"))
+    #expect(error.description.contains("USB-C"))
+}

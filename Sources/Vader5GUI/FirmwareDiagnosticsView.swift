@@ -16,20 +16,17 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
     @Published var downloadingModule: String?
     @Published var firmwareDownloadMessage: String?
     @Published var firmwareDownloadError: String?
-    @Published var scenario = "Success"
-    @Published var selectedPackageIsDongleImage = false
+    @Published var selectedPackageIsTelinkImage = false
+    @Published var dongleChannelPresent = false
+    @Published var rfChannelPresent = false
     @Published var isUpdating = false
     @Published var updateSent = 0
     @Published var updateTotal = 0
     @Published var updateMessage: String?
-    @Published var showUpdateConfirmation = false
+    @Published var pendingUpdateTarget: Vader5DongleUpdater.Target?
+    @Published var showEventLog = false
     private var selectedPackage: Data?
 
-    let scenarios = [
-        "Success", "CRC error", "Timeout", "Invalid block", "Flash full",
-        "Disconnect and recover", "Corrupted packet and retry", "Interrupt and restart",
-        "Unexpected acknowledgement",
-    ]
     func checkFirmware() {
         guard !isCheckingFirmware else { return }
         isCheckingFirmware = true
@@ -48,7 +45,7 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
                 lastFirmwareCheck = Date()
                 availableFirmware = try await Vader5FirmwareUpdateClient().check(
                     versions: versions,
-                    appVersion: "4.1.0.31"
+                    appVersion: "5.0.0.0"
                 )
                 hasCheckedFirmware = true
             } catch {
@@ -73,7 +70,7 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
             let data = try Data(contentsOf: url)
             selectedPackage = data
             packageInfo = Vader5FirmwarePackageInspector.inspect(data: data, fileName: url.lastPathComponent)
-            selectedPackageIsDongleImage = (try? Vader5DongleUpdater.validate(image: data)) != nil
+            refreshUpdateAvailability()
             errorMessage = nil
         } catch {
             errorMessage = String(describing: error)
@@ -101,9 +98,8 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
                     release: release,
                     to: destination)
                 selectedPackage = try Data(contentsOf: destination)
-                selectedPackageIsDongleImage =
-                    (try? Vader5DongleUpdater.validate(image: selectedPackage!)) != nil
                 packageInfo = info
+                refreshUpdateAvailability()
                 firmwareDownloadMessage = "Saved \(module) \(release.version) as \(info.fileName) (SHA-256 \(info.sha256.prefix(12))…)."
             } catch {
                 firmwareDownloadError = String(describing: error)
@@ -112,38 +108,25 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
         }
     }
 
-    func runDryRun() {
-        let selection: (Vader5SimulationScenario, Vader5DryRunPolicy) = switch scenario {
-        case "CRC error": (.crcError(block: 0), .init())
-        case "Timeout": (.timeout(block: 0), .init())
-        case "Invalid block": (.invalidBlock(block: 0), .init())
-        case "Flash full": (.flashFull(block: 0), .init())
-        case "Disconnect and recover": (.disconnectOnce(block: 0), .init(maxRecoveryRestarts: 1))
-        case "Corrupted packet and retry": (.corruptedPacketOnce(block: 0), .init(maxPacketRetries: 1))
-        case "Interrupt and restart": (.interrupted(block: 0), .init(maxRecoveryRestarts: 1))
-        case "Unexpected acknowledgement": (.unexpectedAcknowledgement(block: 0), .init())
-        default: (.success, .init())
+    private func refreshUpdateAvailability() {
+        let valid = selectedPackage.map { (try? Vader5DongleUpdater.validate(image: $0)) != nil } ?? false
+        selectedPackageIsTelinkImage = valid
+        guard valid else {
+            dongleChannelPresent = false
+            rfChannelPresent = false
+            return
         }
-        let selected = selection.0
-        do {
-            let sample = Data((0..<160).map { UInt8($0 & 0xff) })
-            let result = try Vader5DiagnosticUpdater.run(
-                image: selectedPackage ?? sample, scenario: selected, policy: selection.1)
-            events = result.events
-            errorMessage = nil
-        } catch {
-            errorMessage = String(describing: error)
-            // Re-run the transport directly so the monitor still shows the simulated fault trace.
-            let transport = Vader5DryRunTransport(scenario: selected)
-            _ = try? transport.exchange(Vader5HIDOTAProtocol.startReport(), block: nil)
-            _ = try? transport.exchange(
-                Vader5HIDOTAProtocol.dataReport(image: Data(repeating: 0xaa, count: 16), startingBlock: 0).report,
-                block: 0)
-            events = transport.events
+        Task.detached(priority: .utility) {
+            let dongle = Vader5DongleUpdater.isChannelPresent(target: .dongle)
+            let rf = Vader5DongleUpdater.isChannelPresent(target: .controllerRF)
+            Task { @MainActor in
+                self.dongleChannelPresent = dongle
+                self.rfChannelPresent = rf
+            }
         }
     }
 
-    func startDongleUpdate() {
+    func startUpdate(target: Vader5DongleUpdater.Target) {
         guard let image = selectedPackage, !isUpdating else { return }
         isUpdating = true
         updateSent = 0
@@ -154,7 +137,7 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    let updater = Vader5DongleUpdater()
+                    let updater = Vader5DongleUpdater(target: target)
                     updater.onPhase = { phase in
                         guard case let .transferring(sent, total) = phase else { return }
                         Task { @MainActor in
@@ -167,7 +150,9 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
                     }
                     _ = try updater.update(image: image)
                 }.value
-                updateMessage = "Dongle update committed successfully. The receiver rebooted into the new image."
+                updateMessage = "\(target.displayName.capitalized) update committed successfully. The device rebooted into the new image."
+                try? await Task.sleep(for: .seconds(2))
+                checkFirmware()
             } catch {
                 errorMessage = String(describing: error)
             }
@@ -184,10 +169,7 @@ struct FirmwareDiagnosticsView: View {
             VStack(spacing: 18) {
                 safetyCard
                 firmwareCard
-                HStack(alignment: .top, spacing: 18) {
-                    packageCard
-                    simulatorCard
-                }
+                packageCard
                 monitorCard
             }
             .padding(22)
@@ -198,7 +180,7 @@ struct FirmwareDiagnosticsView: View {
     private var safetyCard: some View {
         GroupBox {
             Label(
-                "Firmware metadata requires the USB receiver. Dongle updates run the verified Telink OTA flow on the FFEE channel and ask for confirmation before writing; the receiver validates the image before committing.",
+                "Firmware metadata requires the USB receiver. Telink OTA updates run the verified flow on the receiver's FFEE channel (dongle) or the cabled controller's FFEF channel (RF), ask for confirmation before writing, and the chip validates the image before committing.",
                 systemImage: "lock.shield.fill"
             )
             .foregroundStyle(.green)
@@ -347,11 +329,11 @@ struct FirmwareDiagnosticsView: View {
                 Button("Inspect .fwpkg…") { model.inspectPackage() }
                     .buttonStyle(.bordered)
 
-                if model.selectedPackageIsDongleImage {
+                if model.selectedPackageIsTelinkImage {
                     Divider()
                     if model.isUpdating {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Updating receiver dongle — do not unplug or power off.")
+                            Text("Updating — do not unplug or power off.")
                                 .font(.callout.weight(.semibold))
                                 .foregroundStyle(.orange)
                             ProgressView(
@@ -362,13 +344,34 @@ struct FirmwareDiagnosticsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     } else {
-                        Button {
-                            model.showUpdateConfirmation = true
-                        } label: {
-                            Label("Install to dongle…", systemImage: "memorychip")
+                        HStack(spacing: 10) {
+                            if model.dongleChannelPresent {
+                                Button {
+                                    model.pendingUpdateTarget = .dongle
+                                } label: {
+                                    Label("Install to dongle", systemImage: "memorychip")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.orange)
+                            }
+                            if model.rfChannelPresent {
+                                Button {
+                                    model.pendingUpdateTarget = .controllerRF
+                                } label: {
+                                    Label("Install to controller RF", systemImage: "memorychip")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.orange)
+                            }
+                            if !model.dongleChannelPresent && !model.rfChannelPresent {
+                                Label("No Telink update channel is connected (receiver FFEE or cabled controller FFEF).", systemImage: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.orange)
+                        Text("Installing writes this image to the selected chip over its Telink OTA channel. The chip validates the image before committing.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     if let message = model.updateMessage {
                         Label(message, systemImage: "checkmark.circle.fill")
@@ -381,62 +384,102 @@ struct FirmwareDiagnosticsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
-        .alert("Update receiver dongle?", isPresented: $model.showUpdateConfirmation) {
-            Button("Update", role: .destructive) { model.startDongleUpdate() }
-            Button("Cancel", role: .cancel) {}
+        .alert(
+            "Update \(model.pendingUpdateTarget?.displayName ?? "device")?",
+            isPresented: Binding(
+                get: { model.pendingUpdateTarget != nil },
+                set: { if !$0 { model.pendingUpdateTarget = nil } }
+            )
+        ) {
+            Button("Update", role: .destructive) {
+                if let target = model.pendingUpdateTarget {
+                    model.startUpdate(target: target)
+                }
+                model.pendingUpdateTarget = nil
+            }
+            Button("Cancel", role: .cancel) { model.pendingUpdateTarget = nil }
         } message: {
-            Text("This writes the selected image to the Vader 5 Pro receiver's dongle chip. Keep the receiver plugged in until the update completes.")
+            Text(confirmationText(for: model.pendingUpdateTarget))
         }
     }
 
-    private var simulatorCard: some View {
-        GroupBox("OTA simulator and dry run") {
-            VStack(alignment: .leading, spacing: 12) {
-                Picker("Response", selection: $model.scenario) {
-                    ForEach(model.scenarios, id: \.self, content: Text.init)
-                }
-                Text(model.packageInfo == nil
-                    ? "Builds reports from sample bytes against a fake device. Inspect a package to use its bytes."
-                    : "Builds reports from the selected package against a fake device.")
-                    .foregroundStyle(.secondary)
-                Button("Run simulated update") { model.runDryRun() }
-                    .buttonStyle(.borderedProminent)
-                if let error = model.errorMessage {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.callout)
-                }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
+    private func confirmationText(for target: Vader5DongleUpdater.Target?) -> String {
+        switch target {
+        case .dongle:
+            "This writes the selected image to the receiver's dongle chip. Keep the receiver plugged in until the update completes."
+        case .controllerRF:
+            "This writes the selected image to the controller's RF chip over its USB-C connection. Only install an image Flydigi published for the RF module, and keep the controller cabled until the update completes."
+        case nil:
+            ""
         }
-        .frame(maxWidth: .infinity)
     }
 
     private var monitorCard: some View {
-        GroupBox("HID monitor") {
-            VStack(alignment: .leading, spacing: 6) {
-                if model.events.isEmpty {
-                    Text("Run a simulation to see decoded reports.").foregroundStyle(.secondary)
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                if let last = model.events.last {
+                    HStack(spacing: 14) {
+                        monitorStat("TX", model.events.lazy.filter { $0.direction == .transmit }.count, .blue)
+                        monitorStat("RX", model.events.lazy.filter { $0.direction == .receive }.count, .green)
+                        if model.events.contains(where: { $0.direction == .status }) {
+                            monitorStat("STATUS", model.events.lazy.filter { $0.direction == .status }.count, .orange)
+                        }
+                        Divider().frame(height: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(last.message).font(.caption.weight(.semibold))
+                            Text("\(last.direction.rawValue) · \(last.timestamp.formatted(date: .omitted, time: .standard))")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                } else {
+                    Text("OTA frames exchanged with the receiver appear here during an update.")
+                        .foregroundStyle(.secondary)
                 }
-                ForEach(model.events) { event in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(event.direction.rawValue)
-                            .font(.system(.caption, design: .monospaced).bold())
-                            .foregroundStyle(event.direction == .transmit ? .blue : .green)
-                            .frame(width: 48, alignment: .leading)
-                        Text(event.message).font(.system(.caption, design: .monospaced))
-                        if !event.bytes.isEmpty {
-                            Text(event.bytes.prefix(12).map { String(format: "%02X", $0) }.joined(separator: " "))
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+
+                DisclosureGroup("Packet log (\(model.events.count))", isExpanded: $model.showEventLog) {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 3) {
+                                ForEach(model.events.suffix(80)) { event in
+                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                        Text(event.direction.rawValue)
+                                            .font(.system(.caption, design: .monospaced).bold())
+                                            .foregroundStyle(event.direction == .transmit ? .blue : .green)
+                                            .frame(width: 48, alignment: .leading)
+                                        Text(event.message).font(.system(.caption, design: .monospaced))
+                                        if !event.bytes.isEmpty {
+                                            Text(event.bytes.prefix(12).map { String(format: "%02X", $0) }.joined(separator: " "))
+                                                .font(.system(.caption2, design: .monospaced))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                    }
+                                    .id(event.id)
+                                }
+                            }
+                        }
+                        .frame(height: 180)
+                        .onChange(of: model.events.count) { _ in
+                            if let last = model.events.last {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
                         }
                     }
                 }
+                .disabled(model.events.isEmpty)
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Label("HID monitor", systemImage: "waveform.path.ecg")
+        }
+    }
+
+    private func monitorStat(_ label: String, _ count: Int, _ color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text("\(count)").font(.callout.weight(.bold).monospacedDigit()).foregroundStyle(color)
+            Text(label).font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
         }
     }
 

@@ -20,11 +20,16 @@ The verified Charging Station 2 Pro display framing is documented in
 
 The app now includes a **Firmware Diagnostics** section that reads the connected
 controller's current firmware versions over USB, checks those versions against
-Flydigi's service, downloads available packages to a user-selected file, inspects
-packages, and runs an in-memory OTA simulator. It can also **install a receiver
-dongle update** from a validated Telink `OTA_F5_Dongle` image — confirmed working
-end-to-end on hardware — behind an explicit confirmation. Controller (Megahunt),
-RF, and SI writes are not implemented; only the dongle path is enabled.
+Flydigi's service, downloads available packages to a user-selected file, and
+inspects packages. It can **install receiver dongle updates** from a validated
+Telink image over the `0xFFEE` channel — confirmed working end-to-end on
+hardware — behind an explicit confirmation, and can target the cabled
+controller's RF chip over the `0xFFEF` channel with the same verified codec
+(the RF channel enumerates and answers, but currently rejects OTA frames with
+status `0x09`; treat RF installs as experimental until that precondition is
+identified). Main (Megahunt) and SI (Jieli) writes are not implemented — the
+Megahunt boot identity (`0483:5720`) and feature-report protocol are decoded in
+[`docs/windows-firmware-updater.md`](docs/windows-firmware-updater.md).
 
 The Vader 5 Pro identifies as device code `f5`, device ID `130` (`DeviceType`
 `0x82`). Its receiver dongle is a Telink-based chip updated through the

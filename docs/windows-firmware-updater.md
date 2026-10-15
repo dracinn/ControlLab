@@ -18,12 +18,20 @@ includes the current main, RF, SI, and dongle versions.
 `Vader5FirmwareUpdateClient` implements this request and response format.
 
 Using versions read live over USB (main `7.1.5.2`, RF `1.0.2.6`, SI `3.5.1.7`,
-dongle `0.4.6.7`), the f5 catalog offers:
+dongle `0.4.6.7`), the f5 catalog offers (with `appVersion` >= `5.0.0.0`;
+older app versions see fewer entries — e.g. `4.1.0.31` only exposes main
+`7.1.5.4`):
 
-- Main `7.1.5.4`: `F5_Gamepad_MH2113_V7154_DFU_20260612.bin` (Megahunt)
-- Dongle `0.4.6.7`: `OTA_F5_Dongle_V0467_1209.bin` (Telink OTA image — only
-  listed when the reported version is older, i.e. already current here)
-- RF and SI return `null` (current)
+- Main `7.2.2.6`: `F5P_MH2113_Refactor_V7226.bin` (Megahunt, raw ARM image,
+  208500 B, vector table at base `0x08000000`)
+- RF `1.0.4.3`: `F5P_8208_Refactor_V1043.bin` (Telink 8208 image, `KNLT`
+  magic, `source_bin_size` at offset 24, 27380 B)
+- Dongle `0.4.8.3`: `F5P_Telink80_Dongle_Refactor_V0483.bin` (Telink image,
+  27012 B)
+- SI: `null`
+
+Per-chip `min_app_version` gates which releases are returned; the app now
+reports `5.0.0.0` so all currently published updates are visible.
 
 ## Windows dispatch
 
@@ -161,6 +169,67 @@ exactly the layout `HidUpdater.LoadBinFile` expects).
       `controllab-cli --update-dongle <image> --confirm-update` — full image
       transferred, completion `0x00`, device healthy. GUI exposes it behind a
       confirmation dialog when a validated Telink dongle image is inspected.
+
+## Multi-module support (2026-07-23)
+
+The F5 module map from `GenerateControllerVader5`:
+
+| Module | Chip | Backend | Channel |
+|--------|------|---------|---------|
+| ChipMain (0) | Megahunt MH2113 | `MhExeUpdater` → `tool/mhtool/hid_boot_command.exe` | separate boot device |
+| ChipRf (1) | Telink 8208 | `HidUpdater` | usage page `FFEF` |
+| ChipSi (2) | Jieli | `JieLiUpdater` / `jl_firmware_upgrade_x64.dll` | USB mass-storage UFW |
+| ChipDongle (6) | Telink | `HidUpdater` | usage page `FFEE` (done) |
+
+`SwitchUsb` on FFA0 takes the `ChipModule` value directly:
+`5A A5 1F 03 <module> <sum(1F 03 module)>`. `FirmwareConsole` only invokes it
+for `ChipType.Wch`; Telink targets go straight to `HidUpdater`.
+
+### Controller FFEF channel (probed on hardware)
+
+When the controller is connected by USB-C it enumerates as `37d7:2401` (same
+VID/PID/product string as the receiver) with interfaces `0001` (gamepad),
+`FFA0` (command), and `FFEF` (update). The FFEF endpoint accepts report ID 5
+output reports and echoes them. During an OTA probe it answered every frame
+with `05 02 03 00 06 ff 09 XX` — status `0x09`, which the official
+`HidUpdater` treats as "OTA Fail, Error Code = 9". The channel is live but
+rejects OTA frames in the observed state; the missing arming precondition
+(possibly radio-link state, battery/charge gating, or an additional FFA0
+handshake) is not yet identified. No RF image has been committed.
+
+### Megahunt main chip (decoded from `hid_boot_command.exe`)
+
+The boot tool opens `hid_open(vid=0x0483, pid=0x5720)` — a distinct boot-mode
+USB identity that does not enumerate in normal mode — and speaks HID feature
+reports:
+
+- `01`: `[01][cmd32][00 00 00 00]` send (9 B); `[01][4-byte value]` read (5 B)
+- `02`: `[02][len][00][data <= 60]` write (63 B); same layout read back
+- `03`: `[03][8-byte value][4-byte value]` set (13 B) and get
+- `04`: `[04][cmd32]` (5 B)
+- `05`: `[05 A5 A5 A5 A5]` — ISP-entry magic
+
+Console flow per the binary's strings: chip erase → flag write → program
+(progress %) → flag read → verify (progress %) → "update complete". The
+trigger that makes the controller enumerate `0483:5720` (the Megahunt boot
+mode) is still unidentified; `SwitchUsb(ChipMain)` did not produce a new
+device in the tested states.
+
+### SI chip (Jieli)
+
+`JieLiUpdater` scans drive letters A–Z for a vendor mass-storage device and
+writes a `.ufw` via `jl_firmware_upgrade_x64.dll` — a Windows drive-letter
+workflow. The equivalent on macOS would be watching for a new MSD volume and
+writing the UFW file; no such volume has been observed yet.
+
+### Implementation state
+
+`Vader5DongleUpdater` gained a `Target` selector — `.dongle` (FFEE, verified)
+and `.controllerRF` (FFEF, channel live, commit not yet verified — the
+`0x09` precondition must be resolved first). The GUI offers an install
+button per target only when that channel is enumerated and the inspected
+image passes Telink validation. CLI: `--update-dongle` / `--update-rf`, both
+requiring `--confirm-update`.
 
 `SwitchUsb` (`00 5A A5 1F 03 06 28 …` on FFA0; byte 0 is the report-ID slot the
 Windows `WriteDataImpl` overwrites with `_outReportId = 0`) is echoed by the

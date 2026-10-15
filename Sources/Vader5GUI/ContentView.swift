@@ -52,6 +52,7 @@ struct ContentView: View {
         .background(CLTheme.background)
         .preferredColorScheme(.dark)
         .tint(CLTheme.accent)
+        .onAppear { model.start() }
         .onDisappear { model.stop() }
     }
 

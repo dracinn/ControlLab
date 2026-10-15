@@ -82,13 +82,19 @@ final class BridgeViewModel: ObservableObject {
         }
     }
 
+    func start() {
+        guard !isRunning else { return }
+        errorMessage = nil
+        do { try bridge.start(mode: mode, transport: transport) }
+        catch { errorMessage = String(describing: error) }
+    }
+
     func toggle() {
         errorMessage = nil
         if isRunning {
             bridge.stop()
         } else {
-            do { try bridge.start(mode: mode, transport: transport) }
-            catch { errorMessage = String(describing: error) }
+            start()
         }
     }
 
