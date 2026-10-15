@@ -17,15 +17,32 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
     @Published var firmwareDownloadMessage: String?
     @Published var firmwareDownloadError: String?
     @Published var selectedPackageIsTelinkImage = false
+    @Published var selectedPackageIsMainImage = false
     @Published var dongleChannelPresent = false
     @Published var rfChannelPresent = false
+    @Published var mainChannelPresent = false
     @Published var isUpdating = false
+    @Published var isUpdatingMain = false
     @Published var updateSent = 0
     @Published var updateTotal = 0
     @Published var updateMessage: String?
-    @Published var pendingUpdateTarget: Vader5DongleUpdater.Target?
+    @Published var pendingUpdateTarget: InstallTarget?
     @Published var showEventLog = false
     private var selectedPackage: Data?
+
+    enum InstallTarget: Equatable {
+        case dongle
+        case controllerRF
+        case main
+
+        var displayName: String {
+            switch self {
+            case .dongle: "dongle"
+            case .controllerRF: "controller RF"
+            case .main: "main chip"
+            }
+        }
+    }
 
     func checkFirmware() {
         guard !isCheckingFirmware else { return }
@@ -109,24 +126,77 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
     }
 
     private func refreshUpdateAvailability() {
-        let valid = selectedPackage.map { (try? Vader5DongleUpdater.validate(image: $0)) != nil } ?? false
-        selectedPackageIsTelinkImage = valid
-        guard valid else {
-            dongleChannelPresent = false
-            rfChannelPresent = false
-            return
-        }
+        selectedPackageIsTelinkImage =
+            selectedPackage.map { (try? Vader5DongleUpdater.validate(image: $0)) != nil } ?? false
+        selectedPackageIsMainImage =
+            selectedPackage.map { (try? Vader5MainUpdater.validate(image: $0)) != nil } ?? false
         Task.detached(priority: .utility) {
             let dongle = Vader5DongleUpdater.isChannelPresent(target: .dongle)
             let rf = Vader5DongleUpdater.isChannelPresent(target: .controllerRF)
+            let main = Vader5MainUpdater.isChannelPresent()
             Task { @MainActor in
                 self.dongleChannelPresent = dongle
                 self.rfChannelPresent = rf
+                self.mainChannelPresent = main
             }
         }
     }
 
-    func startUpdate(target: Vader5DongleUpdater.Target) {
+    func startUpdate(target: InstallTarget) {
+        switch target {
+        case .main:
+            startMainUpdate()
+        case .dongle:
+            startTelinkUpdate(target: .dongle)
+        case .controllerRF:
+            startTelinkUpdate(target: .controllerRF)
+        }
+    }
+
+    private func startMainUpdate() {
+        guard let image = selectedPackage, !isUpdating else { return }
+        isUpdating = true
+        isUpdatingMain = true
+        updateSent = 0
+        updateTotal = 0
+        updateMessage = nil
+        errorMessage = nil
+        events = []
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let updater = Vader5MainUpdater()
+                    updater.onPhase = { phase in
+                        Task { @MainActor in
+                            switch phase {
+                            case let .programming(sent, total):
+                                self.updateSent = sent
+                                self.updateTotal = total
+                            case let .verifying(read, total):
+                                self.updateSent = read
+                                self.updateTotal = total
+                            default:
+                                break
+                            }
+                        }
+                    }
+                    updater.onEvent = { event in
+                        Task { @MainActor in self.events.append(event) }
+                    }
+                    try updater.update(image: image)
+                }.value
+                updateMessage = "Main chip update committed successfully. The controller rebooted into the new image."
+                try? await Task.sleep(for: .seconds(2))
+                checkFirmware()
+            } catch {
+                errorMessage = String(describing: error)
+            }
+            isUpdating = false
+            isUpdatingMain = false
+        }
+    }
+
+    private func startTelinkUpdate(target: Vader5DongleUpdater.Target) {
         guard let image = selectedPackage, !isUpdating else { return }
         isUpdating = true
         updateSent = 0
@@ -329,7 +399,7 @@ struct FirmwareDiagnosticsView: View {
                 Button("Inspect .fwpkg…") { model.inspectPackage() }
                     .buttonStyle(.bordered)
 
-                if model.selectedPackageIsTelinkImage {
+                if model.selectedPackageIsTelinkImage || model.selectedPackageIsMainImage {
                     Divider()
                     if model.isUpdating {
                         VStack(alignment: .leading, spacing: 6) {
@@ -339,13 +409,13 @@ struct FirmwareDiagnosticsView: View {
                             ProgressView(
                                 value: Double(model.updateSent),
                                 total: Double(max(model.updateTotal, 1)))
-                            Text("\(model.updateSent)/\(model.updateTotal) blocks")
+                            Text("\(model.updateSent)/\(model.updateTotal) \(model.isUpdatingMain ? "bytes" : "blocks")")
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
                         }
                     } else {
                         HStack(spacing: 10) {
-                            if model.dongleChannelPresent {
+                            if model.selectedPackageIsTelinkImage && model.dongleChannelPresent {
                                 Button {
                                     model.pendingUpdateTarget = .dongle
                                 } label: {
@@ -354,7 +424,7 @@ struct FirmwareDiagnosticsView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(.orange)
                             }
-                            if model.rfChannelPresent {
+                            if model.selectedPackageIsTelinkImage && model.rfChannelPresent {
                                 Button {
                                     model.pendingUpdateTarget = .controllerRF
                                 } label: {
@@ -363,13 +433,29 @@ struct FirmwareDiagnosticsView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(.orange)
                             }
-                            if !model.dongleChannelPresent && !model.rfChannelPresent {
-                                Label("No Telink update channel is connected (receiver FFEE or cabled controller FFEF).", systemImage: "exclamationmark.triangle")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            if model.selectedPackageIsMainImage && model.mainChannelPresent {
+                                Button {
+                                    model.pendingUpdateTarget = .main
+                                } label: {
+                                    Label("Install to main chip", systemImage: "memorychip")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.orange)
+                            }
+                            let noChannel = (model.selectedPackageIsTelinkImage && !model.dongleChannelPresent && !model.rfChannelPresent)
+                                || (model.selectedPackageIsMainImage && !model.mainChannelPresent)
+                            if noChannel {
+                                Label(
+                                    model.selectedPackageIsMainImage
+                                        ? "The controller's USB-C command channel is not connected."
+                                        : "No Telink update channel is connected (receiver FFEE or cabled controller FFEF).",
+                                    systemImage: "exclamationmark.triangle"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             }
                         }
-                        Text("Installing writes this image to the selected chip over its Telink OTA channel. The chip validates the image before committing.")
+                        Text("Installing writes this image to the selected chip. The device verifies every byte before the commit command is sent.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -403,12 +489,14 @@ struct FirmwareDiagnosticsView: View {
         }
     }
 
-    private func confirmationText(for target: Vader5DongleUpdater.Target?) -> String {
+    private func confirmationText(for target: FirmwareDiagnosticsViewModel.InstallTarget?) -> String {
         switch target {
         case .dongle:
             "This writes the selected image to the receiver's dongle chip. Keep the receiver plugged in until the update completes."
         case .controllerRF:
             "This writes the selected image to the controller's RF chip over its USB-C connection. Only install an image Flydigi published for the RF module, and keep the controller cabled until the update completes."
+        case .main:
+            "This reboots the controller's main chip into the Megahunt boot device and writes the selected image. Only install an image Flydigi published for the main chip, keep the controller cabled, and do not unplug it until the update completes."
         case nil:
             ""
         }

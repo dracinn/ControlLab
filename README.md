@@ -21,14 +21,23 @@ The verified Charging Station 2 Pro display framing is documented in
 The app now includes a **Firmware Diagnostics** section that reads the connected
 controller's current firmware versions over USB, checks those versions against
 Flydigi's service, downloads available packages to a user-selected file, and
-inspects packages. It can **install receiver dongle updates** from a validated
-Telink image over the `0xFFEE` channel — confirmed working end-to-end on
-hardware — behind an explicit confirmation, and can target the cabled
-controller's RF chip over the `0xFFEF` channel with the same verified codec
-(the RF channel enumerates and answers, but currently rejects OTA frames with
-status `0x09`; treat RF installs as experimental until that precondition is
-identified). Main (Megahunt) and SI (Jieli) writes are not implemented — the
-Megahunt boot identity (`0483:5720`) and feature-report protocol are decoded in
+inspects packages. All updateable modules are supported, each verified
+end-to-end on hardware:
+
+- **Receiver dongle** (Telink) — `0xFFEE` OTA channel; installed 0.4.6.7 → 0.4.8.3
+- **Controller RF** (Telink) — `0xFFEF` OTA channel on the cabled controller;
+  installed 1.0.2.6 → 1.0.4.3
+- **Controller main chip** (Megahunt) — the correctly-framed 32-byte
+  `SwitchToFirmwareUpgradeMode` command on `0xFFA0` reboots the controller into
+  the `0483:5720` "MH Offline Downloader" boot device, which is programmed over
+  EP0 feature reports with a full read-back verify before the commit command;
+  installed 7.1.5.2 → 7.2.2.6
+- **SI chip** (Jieli) — documented but not implementable on macOS yet; the
+  official path writes a `.ufw` to a vendor mass-storage device that has not
+  been observed, and Flydigi publishes no SI package for the F5
+
+Install buttons appear only when the matching channel is enumerated and the
+inspected image passes module-specific validation. Protocol details live in
 [`docs/windows-firmware-updater.md`](docs/windows-firmware-updater.md).
 
 The Vader 5 Pro identifies as device code `f5`, device ID `130` (`DeviceType`
@@ -199,8 +208,10 @@ swift run controllab-cli --firmware
 swift run controllab-cli --inspect-firmware /path/to/update.fwpkg
 swift run controllab-cli --simulate-firmware /path/to/update.fwpkg
 
-# Flash a receiver dongle update (requires the explicit second flag)
+# Flash updates (each requires the explicit second flag)
 swift run controllab-cli --update-dongle /path/to/OTA_F5_Dongle.bin --confirm-update
+swift run controllab-cli --update-rf /path/to/F5P_8208_Refactor.bin --confirm-update
+swift run controllab-cli --update-main /path/to/F5P_MH2113_Refactor.bin --confirm-update
 ```
 
 Control the Charging Station 2 Pro display directly:

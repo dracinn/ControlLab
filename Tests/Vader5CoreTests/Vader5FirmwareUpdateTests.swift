@@ -288,3 +288,29 @@ import Testing
     #expect(error.description.contains("FFEF"))
     #expect(error.description.contains("USB-C"))
 }
+
+@Test func validatesMegahuntMainImages() throws {
+    // Valid ARM Cortex-M image: SP in SRAM (0x2000xxxx), reset vector in flash (0x0800xxxx).
+    var image = Data(count: 64)
+    image.replaceSubrange(0..<4, with: [0x30, 0xa9, 0x00, 0x20])
+    image.replaceSubrange(4..<8, with: [0x01, 0x00, 0x01, 0x08])
+    try Vader5MainUpdater.validate(image: image)
+
+    #expect(throws: Vader5MainUpdateError.self) {
+        try Vader5MainUpdater.validate(image: Data(repeating: 0, count: 16))
+    }
+    #expect(throws: Vader5MainUpdateError.self) {
+        try Vader5MainUpdater.validate(image: Data(repeating: 0x55, count: 64))
+    }
+    // Telink image (KNLT) must not be accepted as a Megahunt image.
+    var telink = Data(repeating: 0x55, count: 64)
+    telink.replaceSubrange(0..<4, with: [0x4b, 0x4e, 0x4c, 0x54])
+    #expect(throws: Vader5MainUpdateError.self) {
+        try Vader5MainUpdater.validate(image: telink)
+    }
+}
+
+@Test func megahuntCrcMatchesMpeg2Vector() {
+    // CRC-32/MPEG-2 check vector: "123456789" -> 0x0376e6e7
+    #expect(Vader5MainUpdater.crc32Mpeg2(Data("123456789".utf8)) == 0x0376_e6e7)
+}

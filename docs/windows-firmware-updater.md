@@ -195,7 +195,12 @@ with `05 02 03 00 06 ff 09 XX` — status `0x09`, which the official
 `HidUpdater` treats as "OTA Fail, Error Code = 9". The channel is live but
 rejects OTA frames in the observed state; the missing arming precondition
 (possibly radio-link state, battery/charge gating, or an additional FFA0
-handshake) is not yet identified. No RF image has been committed.
+handshake) is not yet identified.
+
+Update: resolved on hardware — the RF channel accepts the standard Telink
+OTA sequence once the cabled controller is in the right state, and RF
+1.0.2.6 → 1.0.4.3 was committed through `Vader5DongleUpdater` target
+`.controllerRF`.
 
 ### Megahunt main chip (decoded from `hid_boot_command.exe`)
 
@@ -209,11 +214,31 @@ reports:
 - `04`: `[04][cmd32]` (5 B)
 - `05`: `[05 A5 A5 A5 A5]` — ISP-entry magic
 
-Console flow per the binary's strings: chip erase → flag write → program
-(progress %) → flag read → verify (progress %) → "update complete". The
-trigger that makes the controller enumerate `0483:5720` (the Megahunt boot
-mode) is still unidentified; `SwitchUsb(ChipMain)` did not produce a new
-device in the tested states.
+Console flow per the binary's disassembly, verified end-to-end on hardware:
+
+1. Send `SwitchToFirmwareUpgradeMode` for ChipMain over FFA0 — the correct
+   32-byte NewXInput frame is `[06][5A A5][1F][03][00][22][00 × 25]`
+   (endpoint byte 0x06, command 0x1F, payload length 3, module 0,
+   crc = 0x1F+0x03+0x00 = 0x22). Earlier probes failed because they omitted
+   the endpoint byte and sent a truncated 6-byte frame.
+2. The controller reboots and re-enumerates as `0483:5720`
+   "MH Offline Downloader" (bInterfaceClass 3, but macOS never creates an
+   IOHIDDevice for it — the report descriptor does not parse). Feature
+   reports are driven directly over EP0 control transfers instead:
+   `SET_REPORT` = bmRequestType 0x21/bRequest 0x09/wValue 0x03<id>,
+   `GET_REPORT` = 0xA1/0x01/0x03<id>.
+3. Program: `SET 01` reset → `SET 04 [04][size32]` → 60-byte
+   `SET 02 [02][len][00][data]` chunks → `SET 03` validity-flag write of
+   `[03][A5A5A5A5][crc32][size32]` where crc32 is MPEG-2 style
+   (poly 0x04C11DB7, init 0xFFFFFFFF, MSB-first, no final XOR).
+4. Verify: `SET 01` again (read reset) → `GET 02` read-back of every chunk,
+   memcmp'd against the image → `GET 03` flag read.
+5. Commit: `SET 05 [05 A5 A5 A5 A5]` — only sent after every byte verifies;
+   the device then reboots into the new image as `37d7:2401`.
+
+Confirmed on hardware: main chip 7.1.5.2 → 7.2.2.6 with
+`F5P_MH2113_Refactor_V7226.bin` (208,500 bytes), all bytes verified before
+commit, device healthy after reboot.
 
 ### SI chip (Jieli)
 
@@ -224,16 +249,21 @@ writing the UFW file; no such volume has been observed yet.
 
 ### Implementation state
 
-`Vader5DongleUpdater` gained a `Target` selector — `.dongle` (FFEE, verified)
-and `.controllerRF` (FFEF, channel live, commit not yet verified — the
-`0x09` precondition must be resolved first). The GUI offers an install
-button per target only when that channel is enumerated and the inspected
-image passes Telink validation. CLI: `--update-dongle` / `--update-rf`, both
-requiring `--confirm-update`.
+All four modules are now reachable from ControlLab:
 
-`SwitchUsb` (`00 5A A5 1F 03 06 28 …` on FFA0; byte 0 is the report-ID slot the
-Windows `WriteDataImpl` overwrites with `_outReportId = 0`) is echoed by the
-device but produces no observable state change — no re-enumeration, no DFU
-interface, and FFEE answers OTA frames whether or not it was sent. For the
-Telink dongle path it appears to be belt-and-braces; `FirmwareConsole` itself
-only invokes the switch for `ChipType.Wch`.
+- `Vader5DongleUpdater` — `.dongle` (FFEE) and `.controllerRF` (FFEF), both
+  verified on hardware (dongle 0.4.6.7 → 0.4.8.3, RF 1.0.2.6 → 1.0.4.3).
+  CLI: `--update-dongle` / `--update-rf`, gated on `--confirm-update`.
+- `Vader5MainUpdater` — Megahunt main chip via the boot-mode switch +
+  `0483:5720` EP0 feature-report protocol, verified on hardware
+  (7.1.5.2 → 7.2.2.6). CLI: `--update-main` + `--confirm-update`.
+- SI (Jieli) — no package published and no storage-mode trigger observed;
+  documented above.
+
+The GUI shows an install button per module only when its image type is
+detected and its update channel is enumerated; Telink images and Megahunt
+images are validated by distinct magic/header rules.
+
+`SwitchUsb` on FFA0 is the real mode switch after all — but only in the
+correct 32-byte NewXInput framing (`[06][5A A5][1F][03][module][crc]`). The
+truncated 6-byte frames used in early probes echoed back without effect.

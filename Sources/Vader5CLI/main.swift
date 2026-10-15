@@ -461,6 +461,61 @@ for (flag, target) in [
     }
 }
 
+if let optionIndex = CommandLine.arguments.firstIndex(of: "--update-main") {
+    guard CommandLine.arguments.indices.contains(optionIndex + 1) else {
+        FileHandle.standardError.write("Error: --update-main requires a file path.\n".data(using: .utf8)!)
+        exit(2)
+    }
+    guard CommandLine.arguments.contains("--confirm-update") else {
+        FileHandle.standardError.write("""
+            Refusing to update without --confirm-update.
+            This reboots the controller's main chip into the Megahunt boot
+            device (0483:5720) and writes firmware over EP0. Use a genuine
+            Flydigi MH2113 image; every byte is read back and verified before
+            the commit command is sent.
+
+            """.data(using: .utf8)!)
+        exit(2)
+    }
+    do {
+        let url = URL(fileURLWithPath: CommandLine.arguments[optionIndex + 1])
+        let image = try Data(contentsOf: url)
+        try Vader5MainUpdater.validate(image: image)
+        print("Updating main chip with \(url.lastPathComponent) (\(image.count) bytes)…")
+        let updater = Vader5MainUpdater()
+        updater.onPhase = { phase in
+            switch phase {
+            case .enteringBootMode:
+                print("Switching controller to firmware upgrade mode…")
+            case .waitingForBootDevice:
+                print("Waiting for boot device 0483:5720…")
+            case .erasing:
+                print("Erasing…")
+            case let .programming(sent, total):
+                if sent % 6000 == 0 || sent == total {
+                    print("Programming: \(sent)/\(total) bytes")
+                }
+            case .writingFlag:
+                print("Writing validity flag…")
+            case let .verifying(read, total):
+                if read % 6000 == 0 || read == total {
+                    print("Verifying: \(read)/\(total) bytes")
+                }
+            case .committing:
+                print("Committing…")
+            case .completed:
+                break
+            }
+        }
+        try updater.update(image: image)
+        print("Main chip update completed successfully.")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write("Error: \(error)\n".data(using: .utf8)!)
+        exit(1)
+    }
+}
+
 if CommandLine.arguments.contains("--firmware") {
     do {
         let versions = try Vader5FirmwareReader.read()
