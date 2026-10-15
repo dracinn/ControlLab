@@ -411,6 +411,52 @@ if let optionIndex = CommandLine.arguments.firstIndex(of: "--simulate-firmware")
     }
 }
 
+if let optionIndex = CommandLine.arguments.firstIndex(of: "--update-dongle") {
+    guard CommandLine.arguments.indices.contains(optionIndex + 1) else {
+        FileHandle.standardError.write("Error: --update-dongle requires a file path.\n".data(using: .utf8)!)
+        exit(2)
+    }
+    guard CommandLine.arguments.contains("--confirm-update") else {
+        FileHandle.standardError.write("""
+            Refusing to update without --confirm-update.
+            This writes firmware to the Vader 5 Pro USB receiver's dongle chip over
+            the FFEE OTA channel. Use a genuine Flydigi OTA_F5_Dongle image; the
+            receiver validates the image before committing.
+
+            """.data(using: .utf8)!)
+        exit(2)
+    }
+    do {
+        let url = URL(fileURLWithPath: CommandLine.arguments[optionIndex + 1])
+        let image = try Data(contentsOf: url)
+        try Vader5DongleUpdater.validate(image: image)
+        print("Updating dongle with \(url.lastPathComponent) (\(image.count) bytes)…")
+        let updater = Vader5DongleUpdater()
+        updater.onPhase = { phase in
+            switch phase {
+            case .starting:
+                print("Starting OTA session…")
+            case let .transferring(sent, total):
+                if sent % 300 == 0 || sent == total {
+                    print("Transferring: \(sent)/\(total) blocks")
+                }
+            case .finishing:
+                print("Committing image…")
+            case .verifying:
+                print("Verifying…")
+            case .completed:
+                break
+            }
+        }
+        _ = try updater.update(image: image)
+        print("Dongle update completed successfully.")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write("Error: \(error)\n".data(using: .utf8)!)
+        exit(1)
+    }
+}
+
 if CommandLine.arguments.contains("--firmware") {
     do {
         let versions = try Vader5FirmwareReader.read()

@@ -21,9 +21,10 @@ The verified Charging Station 2 Pro display framing is documented in
 The app now includes a **Firmware Diagnostics** section that reads the connected
 controller's current firmware versions over USB, checks those versions against
 Flydigi's service, downloads available packages to a user-selected file, inspects
-packages, and runs an in-memory OTA simulator. Downloads are storage-only;
-attempts to request a real firmware update are refused. The app does not switch
-USB modes, erase, or write controller firmware.
+packages, and runs an in-memory OTA simulator. It can also **install a receiver
+dongle update** from a validated Telink `OTA_F5_Dongle` image — confirmed working
+end-to-end on hardware — behind an explicit confirmation. Controller (Megahunt),
+RF, and SI writes are not implemented; only the dongle path is enabled.
 
 The Vader 5 Pro identifies as device code `f5`, device ID `130` (`DeviceType`
 `0x82`). Its receiver dongle is a Telink-based chip updated through the
@@ -42,11 +43,11 @@ known `api-web.cdn.flydigi.com` host to its working HTTPS endpoint and rejects
 unrecognized insecure download hosts.
 
 > [!IMPORTANT]
-> Although the dongle OTA protocol is now verified on hardware — including a
-> real commit — the in-app updater remains a diagnostics tool. Real firmware
-> writes are still refused until the write path is deliberately enabled with
-> progress reporting and interruption handling. Do not use Firmware
-> Diagnostics as a production updater.
+> The dongle OTA path is verified on hardware, including successful commits.
+> Always use a genuine `OTA_F5_Dongle` image and keep the receiver powered
+> throughout the transfer. The device validates the image before committing,
+> so an interrupted transfer does not corrupt the running firmware — but only
+> ever flash images that belong to this device.
 
 ## Hardware
 
@@ -192,6 +193,9 @@ swift run controllab-cli --firmware
 # Inspect or simulate a downloaded package without opening a HID device
 swift run controllab-cli --inspect-firmware /path/to/update.fwpkg
 swift run controllab-cli --simulate-firmware /path/to/update.fwpkg
+
+# Flash a receiver dongle update (requires the explicit second flag)
+swift run controllab-cli --update-dongle /path/to/OTA_F5_Dongle.bin --confirm-update
 ```
 
 Control the Charging Station 2 Pro display directly:

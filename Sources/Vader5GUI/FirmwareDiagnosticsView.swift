@@ -17,6 +17,12 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
     @Published var firmwareDownloadMessage: String?
     @Published var firmwareDownloadError: String?
     @Published var scenario = "Success"
+    @Published var selectedPackageIsDongleImage = false
+    @Published var isUpdating = false
+    @Published var updateSent = 0
+    @Published var updateTotal = 0
+    @Published var updateMessage: String?
+    @Published var showUpdateConfirmation = false
     private var selectedPackage: Data?
 
     let scenarios = [
@@ -67,6 +73,7 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
             let data = try Data(contentsOf: url)
             selectedPackage = data
             packageInfo = Vader5FirmwarePackageInspector.inspect(data: data, fileName: url.lastPathComponent)
+            selectedPackageIsDongleImage = (try? Vader5DongleUpdater.validate(image: data)) != nil
             errorMessage = nil
         } catch {
             errorMessage = String(describing: error)
@@ -94,6 +101,8 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
                     release: release,
                     to: destination)
                 selectedPackage = try Data(contentsOf: destination)
+                selectedPackageIsDongleImage =
+                    (try? Vader5DongleUpdater.validate(image: selectedPackage!)) != nil
                 packageInfo = info
                 firmwareDownloadMessage = "Saved \(module) \(release.version) as \(info.fileName) (SHA-256 \(info.sha256.prefix(12))…)."
             } catch {
@@ -133,6 +142,38 @@ final class FirmwareDiagnosticsViewModel: ObservableObject {
             events = transport.events
         }
     }
+
+    func startDongleUpdate() {
+        guard let image = selectedPackage, !isUpdating else { return }
+        isUpdating = true
+        updateSent = 0
+        updateTotal = 0
+        updateMessage = nil
+        errorMessage = nil
+        events = []
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let updater = Vader5DongleUpdater()
+                    updater.onPhase = { phase in
+                        guard case let .transferring(sent, total) = phase else { return }
+                        Task { @MainActor in
+                            self.updateSent = sent
+                            self.updateTotal = total
+                        }
+                    }
+                    updater.onEvent = { event in
+                        Task { @MainActor in self.events.append(event) }
+                    }
+                    _ = try updater.update(image: image)
+                }.value
+                updateMessage = "Dongle update committed successfully. The receiver rebooted into the new image."
+            } catch {
+                errorMessage = String(describing: error)
+            }
+            isUpdating = false
+        }
+    }
 }
 
 struct FirmwareDiagnosticsView: View {
@@ -157,13 +198,13 @@ struct FirmwareDiagnosticsView: View {
     private var safetyCard: some View {
         GroupBox {
             Label(
-                "Firmware metadata requires the USB receiver. Packages can be downloaded to a file you choose, while erase, write, and update-mode commands remain unavailable.",
+                "Firmware metadata requires the USB receiver. Dongle updates run the verified Telink OTA flow on the FFEE channel and ask for confirmation before writing; the receiver validates the image before committing.",
                 systemImage: "lock.shield.fill"
             )
             .foregroundStyle(.green)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(8)
-        } label: { Text("Non-destructive mode") }
+        } label: { Text("Firmware diagnostics") }
     }
 
     private var firmwareCard: some View {
@@ -305,11 +346,47 @@ struct FirmwareDiagnosticsView: View {
                 }
                 Button("Inspect .fwpkg…") { model.inspectPackage() }
                     .buttonStyle(.bordered)
+
+                if model.selectedPackageIsDongleImage {
+                    Divider()
+                    if model.isUpdating {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Updating receiver dongle — do not unplug or power off.")
+                                .font(.callout.weight(.semibold))
+                                .foregroundStyle(.orange)
+                            ProgressView(
+                                value: Double(model.updateSent),
+                                total: Double(max(model.updateTotal, 1)))
+                            Text("\(model.updateSent)/\(model.updateTotal) blocks")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Button {
+                            model.showUpdateConfirmation = true
+                        } label: {
+                            Label("Install to dongle…", systemImage: "memorychip")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                    }
+                    if let message = model.updateMessage {
+                        Label(message, systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+                }
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
+        .alert("Update receiver dongle?", isPresented: $model.showUpdateConfirmation) {
+            Button("Update", role: .destructive) { model.startDongleUpdate() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This writes the selected image to the Vader 5 Pro receiver's dongle chip. Keep the receiver plugged in until the update completes.")
+        }
     }
 
     private var simulatorCard: some View {
@@ -337,7 +414,7 @@ struct FirmwareDiagnosticsView: View {
     }
 
     private var monitorCard: some View {
-        GroupBox("HID monitor (simulated)") {
+        GroupBox("HID monitor") {
             VStack(alignment: .leading, spacing: 6) {
                 if model.events.isEmpty {
                     Text("Run a simulation to see decoded reports.").foregroundStyle(.secondary)

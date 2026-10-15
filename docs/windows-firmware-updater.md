@@ -155,6 +155,12 @@ exactly the layout `HidUpdater.LoadBinFile` expects).
       Post-commit heartbeat confirmed the dongle healthy and reporting the
       same version `0.4.6.7` (the image was version-identical, so the commit
       was a no-op in content but exercised the entire write+commit path).
+- [x] In-app writer enabled: `Vader5DongleUpdater` performs the verified
+      flow on the real FFEE interface (echo-paced data frames, finish-frame
+      completion status). Verified again via
+      `controllab-cli --update-dongle <image> --confirm-update` — full image
+      transferred, completion `0x00`, device healthy. GUI exposes it behind a
+      confirmation dialog when a validated Telink dongle image is inspected.
 
 `SwitchUsb` (`00 5A A5 1F 03 06 28 …` on FFA0; byte 0 is the report-ID slot the
 Windows `WriteDataImpl` overwrites with `_outReportId = 0`) is echoed by the

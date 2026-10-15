@@ -259,3 +259,22 @@ import Testing
         try Vader5FirmwareDownloadClient.secureURL(for: unknownHTTP)
     }
 }
+
+@Test func validatesTelinkDongleImages() throws {
+    var image = Data(repeating: 0x55, count: 48)
+    image[24] = 48
+    image[25] = 0
+    image[26] = 0
+    image[27] = 0
+    try Vader5DongleUpdater.validate(image: image)
+
+    #expect(throws: Vader5DongleUpdateError.self) {
+        try Vader5DongleUpdater.validate(image: Data(repeating: 0, count: 16))
+    }
+
+    var wrongSize = Data(repeating: 0x55, count: 48)
+    wrongSize[24] = 47
+    #expect(throws: Vader5DongleUpdateError.self) {
+        try Vader5DongleUpdater.validate(image: wrongSize)
+    }
+}
